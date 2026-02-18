@@ -16,10 +16,16 @@ import {
 const API_URL =
   import.meta.env.VITE_API_URL || "https://api.thestacc.com/core";
 
+interface DemoModule {
+  module: string;
+  status: string;
+  expired: boolean;
+}
+
 interface DemoAccount {
   email: string;
   account_id: string;
-  modules: string[];
+  modules: DemoModule[];
   granted_at: string;
   trial_ends_at: string;
   expired: boolean;
@@ -536,11 +542,11 @@ function Dashboard({
                         <div className="flex gap-1">
                           {account.modules.map((m) => (
                             <Badge
-                              key={m}
+                              key={m.module}
                               variant="secondary"
                               className="text-[10px] px-1.5 py-0 font-medium"
                             >
-                              {m}
+                              {m.module}
                             </Badge>
                           ))}
                         </div>

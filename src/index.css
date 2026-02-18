@@ -4,15 +4,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
-@font-face {
-    font-family: 'Satoshi';
-    src: url('https://cdn.fontshare.com/wf/ZRUNILDPVH2XH2Y5XCMZLKBB5GIDW7YC/TQAXNCAWZ5LPZ3Z2L4YZMLUI66HVZRAE/EGCWNXXYTFQ7K5DGX7HMOTASRRL5UZWK.woff2') format('woff2');
-    font-weight: 400 900;
-    font-display: swap;
-}
-
 @theme inline {
-    --font-sans: 'Satoshi', system-ui, sans-serif;
+    --font-sans: system-ui, -apple-system, sans-serif;
     --radius-sm: calc(var(--radius) - 4px);
     --radius-md: calc(var(--radius) - 2px);
     --radius-lg: var(--radius);
