@@ -25,6 +25,7 @@ interface DemoModule {
 interface DemoAccount {
   email: string;
   account_id: string;
+  project_id: string | null;
   modules: DemoModule[];
   granted_at: string;
   trial_ends_at: string;
@@ -37,11 +38,13 @@ function api(key: string) {
     "Content-Type": "application/json",
   };
   return {
-    async grantDemo(email: string, days: number) {
+    async grantDemo(email: string, days: number, projectId?: string) {
+      const body: Record<string, unknown> = { email, days, modules: ["blog", "localseo"] };
+      if (projectId) body.project_id = projectId;
       const res = await fetch(`${API_URL}/api/v1/admin/grant-demo`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ email, days, modules: ["blog", "localseo"] }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -203,6 +206,7 @@ function Dashboard({
 }) {
   const [accounts, setAccounts] = useState<DemoAccount[]>([]);
   const [email, setEmail] = useState("");
+  const [projectId, setProjectId] = useState("");
   const [days, setDays] = useState("7");
   const [granting, setGranting] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -235,12 +239,14 @@ function Dashboard({
     setGranting(true);
     setMessage(null);
     try {
-      await client.grantDemo(email.trim(), parseInt(days));
+      const result = await client.grantDemo(email.trim(), parseInt(days), projectId.trim() || undefined);
+      const projectNote = result.project_id ? ` (project: ${result.project_id.slice(0, 8)}...)` : '';
       setMessage({
         type: "success",
-        text: `Demo access granted to ${email.trim()} for ${days} days`,
+        text: `Demo access granted to ${email.trim()} for ${days} days${projectNote}`,
       });
       setEmail("");
+      setProjectId("");
       loadAccounts();
     } catch (err) {
       setMessage({
@@ -342,6 +348,23 @@ function Dashboard({
                     placeholder="customer@example.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleGrant()}
+                    className="bg-background/50 border-border/60 h-9 focus-visible:ring-primary/40"
+                  />
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <Label
+                    htmlFor="project-id"
+                    className="text-xs text-muted-foreground"
+                  >
+                    Project ID (optional)
+                  </Label>
+                  <Input
+                    id="project-id"
+                    type="text"
+                    placeholder="Auto-detected for single-project users"
+                    value={projectId}
+                    onChange={(e) => setProjectId(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleGrant()}
                     className="bg-background/50 border-border/60 h-9 focus-visible:ring-primary/40"
                   />
@@ -535,6 +558,11 @@ function Dashboard({
                               month: "short",
                               day: "numeric",
                             })}
+                            {account.project_id && (
+                              <span className="ml-2 text-muted-foreground/60">
+                                &middot; {account.project_id.slice(0, 8)}...
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
