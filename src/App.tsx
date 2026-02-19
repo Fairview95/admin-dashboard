@@ -20,12 +20,20 @@ interface DemoModule {
   module: string;
   status: string;
   expired: boolean;
+  project_id?: string | null;
+  project_name?: string | null;
+}
+
+interface ProjectInfo {
+  id: string;
+  name: string;
 }
 
 interface DemoAccount {
   email: string;
   account_id: string;
   project_id: string | null;
+  projects?: ProjectInfo[];
   modules: DemoModule[];
   granted_at: string;
   trial_ends_at: string;
@@ -134,7 +142,7 @@ function LoginScreen({ onLogin }: { onLogin: (key: string) => void }) {
           </CardHeader>
           <CardContent className="space-y-4 pt-2">
             <div className="space-y-2">
-              <Label htmlFor="admin-key" className="text-xs text-muted-foreground uppercase tracking-wider font-medium">
+              <Label htmlFor="admin-key" className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">
                 Admin Key
               </Label>
               <Input
@@ -296,7 +304,7 @@ function Dashboard({
             variant="ghost"
             size="sm"
             onClick={onLogout}
-            className="text-muted-foreground hover:text-foreground text-xs cursor-pointer"
+            className="text-muted-foreground hover:text-foreground text-sm font-semibold cursor-pointer"
           >
             Sign Out
           </Button>
@@ -338,7 +346,7 @@ function Dashboard({
                 <div className="flex-1 space-y-1.5">
                   <Label
                     htmlFor="email"
-                    className="text-xs text-muted-foreground"
+                    className="text-sm font-semibold text-muted-foreground"
                   >
                     Customer Email
                   </Label>
@@ -355,7 +363,7 @@ function Dashboard({
                 <div className="flex-1 space-y-1.5">
                   <Label
                     htmlFor="project-id"
-                    className="text-xs text-muted-foreground"
+                    className="text-sm font-semibold text-muted-foreground"
                   >
                     Project ID (optional)
                   </Label>
@@ -370,7 +378,7 @@ function Dashboard({
                   />
                 </div>
                 <div className="w-[140px] space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">
+                  <Label className="text-sm font-semibold text-muted-foreground">
                     Trial Duration
                   </Label>
                   <Select value={days} onValueChange={setDays}>
@@ -469,7 +477,7 @@ function Dashboard({
               Demo Accounts
             </h2>
             {!loadingAccounts && (
-              <span className="text-xs text-muted-foreground">
+              <span className="text-sm font-semibold text-muted-foreground">
                 {activeCount} active &middot; {accounts.length} total
               </span>
             )}
@@ -532,94 +540,145 @@ function Dashboard({
                   }}
                 >
                   <Card className="border-border/30 bg-card/40 hover:bg-card/60 transition-colors">
-                    <CardContent className="flex items-center justify-between py-3 px-4">
-                      <div className="flex items-center gap-4 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                          <span className="text-xs font-bold text-primary uppercase">
-                            {account.email[0]}
-                          </span>
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            {account.email}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(account.granted_at).toLocaleDateString(
-                              "en-US",
-                              {
+                    <CardContent className="py-3 px-4 space-y-0">
+                      {/* Header row: avatar + email + dates + status + revoke */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                            <span className="text-sm font-bold text-primary uppercase">
+                              {account.email[0]}
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate">
+                              {account.email}
+                            </p>
+                            <p className="text-sm text-muted-foreground font-semibold">
+                              {new Date(account.granted_at).toLocaleDateString(
+                                "en-US",
+                                {
+                                  month: "short",
+                                  day: "numeric",
+                                }
+                              )}{" "}
+                              &rarr;{" "}
+                              {new Date(
+                                account.trial_ends_at
+                              ).toLocaleDateString("en-US", {
                                 month: "short",
                                 day: "numeric",
-                              }
-                            )}{" "}
-                            &rarr;{" "}
-                            {new Date(
-                              account.trial_ends_at
-                            ).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })}
-                            {account.project_id && (
-                              <span className="ml-2 text-muted-foreground/60">
-                                &middot; {account.project_id.slice(0, 8)}...
-                              </span>
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <Badge
+                            variant={account.expired ? "destructive" : "default"}
+                            className={`text-xs px-2 py-0.5 font-semibold ${
+                              account.expired
+                                ? "bg-destructive/15 text-destructive border-0"
+                                : "bg-emerald-500/15 text-emerald-600 border-0"
+                            }`}
+                          >
+                            {account.expired ? "Expired" : "Active"}
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRevoke(account.email)}
+                            disabled={revoking === account.email}
+                            className="text-destructive border-destructive/30 hover:bg-destructive/10 h-7 px-3 text-sm font-semibold cursor-pointer"
+                          >
+                            {revoking === account.email ? (
+                              <svg
+                                className="animate-spin h-3.5 w-3.5"
+                                viewBox="0 0 24 24"
+                              >
+                                <circle
+                                  className="opacity-25"
+                                  cx="12"
+                                  cy="12"
+                                  r="10"
+                                  stroke="currentColor"
+                                  strokeWidth="4"
+                                  fill="none"
+                                />
+                                <path
+                                  className="opacity-75"
+                                  fill="currentColor"
+                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                                />
+                              </svg>
+                            ) : (
+                              "Revoke"
                             )}
-                          </p>
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="flex gap-1">
-                          {account.modules.map((m) => (
-                            <Badge
-                              key={m.module}
-                              variant="secondary"
-                              className="text-[10px] px-1.5 py-0 font-medium"
-                            >
-                              {m.module}
-                            </Badge>
-                          ))}
-                        </div>
-                        <Badge
-                          variant={account.expired ? "destructive" : "default"}
-                          className={`text-[10px] px-1.5 py-0 font-semibold ${
-                            account.expired
-                              ? "bg-destructive/15 text-destructive border-0"
-                              : "bg-emerald-500/15 text-emerald-600 border-0"
-                          }`}
-                        >
-                          {account.expired ? "Expired" : "Active"}
-                        </Badge>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRevoke(account.email)}
-                          disabled={revoking === account.email}
-                          className="text-muted-foreground hover:text-destructive h-7 px-2 text-xs cursor-pointer"
-                        >
-                          {revoking === account.email ? (
-                            <svg
-                              className="animate-spin h-3 w-3"
-                              viewBox="0 0 24 24"
-                            >
-                              <circle
-                                className="opacity-25"
-                                cx="12"
-                                cy="12"
-                                r="10"
-                                stroke="currentColor"
-                                strokeWidth="4"
-                                fill="none"
-                              />
-                              <path
-                                className="opacity-75"
-                                fill="currentColor"
-                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                              />
-                            </svg>
-                          ) : (
-                            "Revoke"
-                          )}
-                        </Button>
-                      </div>
+
+                      {/* Project rows */}
+                      {(() => {
+                        // Group modules by project
+                        const projectRows: { projectName: string | null; projectId: string | null; modules: DemoModule[] }[] = [];
+                        const byProject = new Map<string, DemoModule[]>();
+                        const accountLevel: DemoModule[] = [];
+
+                        for (const m of account.modules) {
+                          if (m.project_id) {
+                            const existing = byProject.get(m.project_id) || [];
+                            existing.push(m);
+                            byProject.set(m.project_id, existing);
+                          } else {
+                            accountLevel.push(m);
+                          }
+                        }
+
+                        for (const [pid, mods] of byProject.entries()) {
+                          projectRows.push({
+                            projectName: mods[0]?.project_name || null,
+                            projectId: pid,
+                            modules: mods,
+                          });
+                        }
+                        if (accountLevel.length > 0) {
+                          projectRows.push({
+                            projectName: null,
+                            projectId: null,
+                            modules: accountLevel,
+                          });
+                        }
+
+                        if (projectRows.length === 0) return null;
+
+                        return (
+                          <div className="ml-12 mt-2 space-y-1">
+                            {projectRows.map((row, idx) => (
+                              <div
+                                key={row.projectId || `account-${idx}`}
+                                className="flex items-center gap-3 py-1 px-2 rounded-md bg-muted/30"
+                              >
+                                <span
+                                  className="text-sm font-semibold text-muted-foreground min-w-[140px] truncate"
+                                  title={row.projectId || "Account-level"}
+                                >
+                                  {row.projectName || (row.projectId ? `${row.projectId.slice(0, 8)}...` : "Account-level")}
+                                </span>
+                                <div className="flex gap-1.5">
+                                  {row.modules.map((m, mi) => (
+                                    <Badge
+                                      key={`${m.module}-${mi}`}
+                                      variant="secondary"
+                                      className="text-xs px-2 py-0.5 font-semibold"
+                                    >
+                                      {m.module}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </CardContent>
                   </Card>
                 </motion.div>
