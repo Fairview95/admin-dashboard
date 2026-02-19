@@ -12,6 +12,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const API_URL =
   import.meta.env.VITE_API_URL || "https://api.thestacc.com/core";
@@ -223,6 +233,7 @@ function Dashboard({
     text: string;
   } | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null);
 
   const client = api(adminKey);
 
@@ -267,9 +278,11 @@ function Dashboard({
   };
 
   const handleRevoke = async (accountEmail: string) => {
+    setRevokeConfirm(null);
     setRevoking(accountEmail);
     try {
       await client.revokeDemo(accountEmail);
+      setMessage({ type: "success", text: `Revoked demo access for ${accountEmail}` });
       loadAccounts();
     } catch {
       setMessage({ type: "error", text: `Failed to revoke ${accountEmail}` });
@@ -301,10 +314,10 @@ function Dashboard({
             </span>
           </div>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={onLogout}
-            className="text-muted-foreground hover:text-foreground text-sm font-semibold cursor-pointer"
+            className="text-destructive border-destructive/30 hover:bg-destructive/10 text-sm font-semibold cursor-pointer"
           >
             Sign Out
           </Button>
@@ -585,7 +598,7 @@ function Dashboard({
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleRevoke(account.email)}
+                            onClick={() => setRevokeConfirm(account.email)}
                             disabled={revoking === account.email}
                             className="text-destructive border-destructive/30 hover:bg-destructive/10 h-7 px-3 text-sm font-semibold cursor-pointer"
                           >
@@ -687,6 +700,28 @@ function Dashboard({
           )}
         </motion.div>
       </main>
+
+      <AlertDialog open={!!revokeConfirm} onOpenChange={(open) => !open && setRevokeConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke Demo Access</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently revoke all demo subscriptions for{" "}
+              <span className="font-semibold text-foreground">{revokeConfirm}</span>.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => revokeConfirm && handleRevoke(revokeConfirm)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Revoke Access
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
