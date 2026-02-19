@@ -93,8 +93,8 @@ function LoginScreen({ onLogin }: { onLogin: (key: string) => void }) {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-[oklch(0.52_0.24_280/0.08)] rounded-full blur-[120px]" />
-        <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-[oklch(0.45_0.2_300/0.06)] rounded-full blur-[120px]" />
+        <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-[oklch(0.52_0.24_280/0.06)] rounded-full blur-[120px]" />
+        <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-[oklch(0.45_0.2_300/0.05)] rounded-full blur-[120px]" />
       </div>
 
       <motion.div
@@ -269,8 +269,8 @@ function Dashboard({
   return (
     <div className="min-h-screen">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-1/3 left-1/4 w-[500px] h-[500px] bg-[oklch(0.52_0.24_280/0.05)] rounded-full blur-[150px]" />
-        <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-[oklch(0.45_0.2_300/0.04)] rounded-full blur-[120px]" />
+        <div className="absolute -top-1/3 left-1/4 w-[500px] h-[500px] bg-[oklch(0.52_0.24_280/0.04)] rounded-full blur-[150px]" />
+        <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-[oklch(0.45_0.2_300/0.03)] rounded-full blur-[120px]" />
       </div>
 
       {/* Header */}
@@ -404,7 +404,7 @@ function Dashboard({
                       initial={{ opacity: 0, x: -8 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0 }}
-                      className={`text-sm ${message.type === "success" ? "text-emerald-400" : "text-destructive"}`}
+                      className={`text-sm ${message.type === "success" ? "text-emerald-600" : "text-destructive"}`}
                     >
                       {message.text}
                     </motion.span>
@@ -555,7 +555,7 @@ function Dashboard({
                           className={`text-[10px] px-1.5 py-0 font-semibold ${
                             account.expired
                               ? "bg-destructive/15 text-destructive border-0"
-                              : "bg-emerald-500/15 text-emerald-400 border-0"
+                              : "bg-emerald-500/15 text-emerald-600 border-0"
                           }`}
                         >
                           {account.expired ? "Expired" : "Active"}

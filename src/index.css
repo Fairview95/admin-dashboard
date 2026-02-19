@@ -2,8 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
-
 @theme inline {
     --font-sans: system-ui, -apple-system, sans-serif;
     --radius-sm: calc(var(--radius) - 4px);
@@ -48,36 +46,36 @@
 
 :root {
     --radius: 0.625rem;
-    --background: oklch(0.085 0.015 280);
-    --foreground: oklch(0.95 0.01 280);
-    --card: oklch(0.12 0.02 280);
-    --card-foreground: oklch(0.95 0.01 280);
-    --popover: oklch(0.12 0.02 280);
-    --popover-foreground: oklch(0.95 0.01 280);
+    --background: oklch(0.98 0.005 280);
+    --foreground: oklch(0.15 0.02 280);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.15 0.02 280);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.15 0.02 280);
     --primary: oklch(0.52 0.24 280);
     --primary-foreground: oklch(0.98 0 0);
-    --secondary: oklch(0.18 0.03 280);
-    --secondary-foreground: oklch(0.9 0.01 280);
-    --muted: oklch(0.18 0.02 280);
-    --muted-foreground: oklch(0.6 0.02 280);
-    --accent: oklch(0.22 0.04 280);
-    --accent-foreground: oklch(0.95 0.01 280);
-    --destructive: oklch(0.65 0.2 25);
-    --border: oklch(0.22 0.03 280);
-    --input: oklch(0.22 0.03 280);
+    --secondary: oklch(0.95 0.01 280);
+    --secondary-foreground: oklch(0.2 0.02 280);
+    --muted: oklch(0.96 0.005 280);
+    --muted-foreground: oklch(0.45 0.02 280);
+    --accent: oklch(0.94 0.015 280);
+    --accent-foreground: oklch(0.15 0.02 280);
+    --destructive: oklch(0.55 0.22 25);
+    --border: oklch(0.88 0.015 280);
+    --input: oklch(0.88 0.015 280);
     --ring: oklch(0.52 0.24 280);
     --chart-1: oklch(0.52 0.24 280);
-    --chart-2: oklch(0.6 0.2 300);
+    --chart-2: oklch(0.55 0.2 300);
     --chart-3: oklch(0.45 0.15 260);
-    --chart-4: oklch(0.7 0.18 320);
-    --chart-5: oklch(0.55 0.22 290);
-    --sidebar: oklch(0.1 0.02 280);
-    --sidebar-foreground: oklch(0.95 0.01 280);
+    --chart-4: oklch(0.6 0.18 320);
+    --chart-5: oklch(0.5 0.22 290);
+    --sidebar: oklch(0.97 0.005 280);
+    --sidebar-foreground: oklch(0.15 0.02 280);
     --sidebar-primary: oklch(0.52 0.24 280);
     --sidebar-primary-foreground: oklch(0.98 0 0);
-    --sidebar-accent: oklch(0.18 0.03 280);
-    --sidebar-accent-foreground: oklch(0.95 0.01 280);
-    --sidebar-border: oklch(0.22 0.03 280);
+    --sidebar-accent: oklch(0.94 0.015 280);
+    --sidebar-accent-foreground: oklch(0.15 0.02 280);
+    --sidebar-border: oklch(0.88 0.015 280);
     --sidebar-ring: oklch(0.52 0.24 280);
 }
 
@@ -90,15 +88,3 @@
     }
 }
 
-/* Noise texture overlay */
-body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    pointer-events: none;
-    opacity: 0.03;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-    background-repeat: repeat;
-    background-size: 256px 256px;
-}
