@@ -50,43 +50,95 @@ interface DemoAccount {
   expired: boolean;
 }
 
+interface UserSubscriptionProject {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+interface UserSubscriptionData {
+  email: string;
+  user_id: string;
+  account_id: string;
+  projects: UserSubscriptionProject[];
+  subscriptions: Record<string, unknown>[];
+  module_activations: Record<string, unknown>[];
+  blog_generation_counts: Record<string, number>;
+}
+
+const Spinner = ({ className = "h-3.5 w-3.5" }: { className?: string }) => (
+  <svg className={`animate-spin ${className}`} viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+  </svg>
+);
+
+const PLAN_LABELS: Record<string, string> = {
+  trial: "Trial (3 blogs)",
+  pro30: "Pro 30 (30 blogs)",
+  active: "Active (unlimited)",
+};
+
+const PLAN_BADGE_COLORS: Record<string, string> = {
+  trial: "bg-amber-500/15 text-amber-600 border-0",
+  pro30: "bg-blue-500/15 text-blue-600 border-0",
+  active: "bg-emerald-500/15 text-emerald-600 border-0",
+  trialing: "bg-amber-500/15 text-amber-600 border-0",
+};
+
 function api(key: string) {
   const headers: Record<string, string> = {
     "X-Admin-Key": key,
     "Content-Type": "application/json",
   };
+
+  async function handleResponse(res: Response) {
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || `Error ${res.status}`);
+    }
+    return res.json();
+  }
+
   return {
-    async grantDemo(email: string, days: number, projectId?: string) {
-      const body: Record<string, unknown> = { email, days, modules: ["blog", "localseo"] };
+    async grantDemo(email: string, days: number, plan: string, projectId?: string) {
+      const body: Record<string, unknown> = { email, days, plan, modules: ["blog", "localseo"] };
       if (projectId) body.project_id = projectId;
       const res = await fetch(`${API_URL}/api/v1/admin/grant-demo`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.detail || `Error ${res.status}`);
-      }
-      return res.json();
+      return handleResponse(res);
     },
     async listAccounts(): Promise<{ accounts: DemoAccount[] }> {
-      const res = await fetch(`${API_URL}/api/v1/admin/demo-accounts`, {
-        headers,
-      });
-      if (!res.ok) throw new Error(`Error ${res.status}`);
-      return res.json();
+      const res = await fetch(`${API_URL}/api/v1/admin/demo-accounts`, { headers });
+      return handleResponse(res);
     },
     async revokeDemo(email: string) {
       const res = await fetch(
         `${API_URL}/api/v1/admin/revoke-demo?email=${encodeURIComponent(email)}`,
         { method: "DELETE", headers }
       );
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.detail || `Error ${res.status}`);
-      }
-      return res.json();
+      return handleResponse(res);
+    },
+    async getUserSubscription(email: string): Promise<UserSubscriptionData> {
+      const res = await fetch(
+        `${API_URL}/api/v1/admin/user-subscription?email=${encodeURIComponent(email)}`,
+        { headers }
+      );
+      return handleResponse(res);
+    },
+    async changeSubscription(email: string, plan: string, days?: number, projectId?: string) {
+      const body: Record<string, unknown> = { email, plan, modules: ["blog", "localseo"] };
+      if (days) body.days = days;
+      if (projectId) body.project_id = projectId;
+      const res = await fetch(`${API_URL}/api/v1/admin/change-subscription`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      return handleResponse(res);
     },
   };
 }
@@ -126,35 +178,19 @@ function LoginScreen({ onLogin }: { onLogin: (key: string) => void }) {
         <Card className="w-[380px] border-border/50 bg-card/80 backdrop-blur-xl shadow-2xl shadow-primary/5">
           <CardHeader className="text-center space-y-3 pb-2">
             <div className="mx-auto w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-primary"
-              >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
                 <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
               </svg>
             </div>
             <div>
-              <CardTitle className="text-lg font-bold tracking-tight">
-                theStacc Admin
-              </CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                Enter your admin key to continue
-              </p>
+              <CardTitle className="text-lg font-bold tracking-tight">theStacc Admin</CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">Enter your admin key to continue</p>
             </div>
           </CardHeader>
           <CardContent className="space-y-4 pt-2">
             <div className="space-y-2">
-              <Label htmlFor="admin-key" className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">
-                Admin Key
-              </Label>
+              <Label htmlFor="admin-key" className="text-sm text-muted-foreground uppercase tracking-wider font-semibold">Admin Key</Label>
               <Input
                 id="admin-key"
                 type="password"
@@ -165,53 +201,244 @@ function LoginScreen({ onLogin }: { onLogin: (key: string) => void }) {
                 className="bg-background/50 border-border/60 h-10 focus-visible:ring-primary/40"
               />
             </div>
-
             <AnimatePresence>
               {error && (
-                <motion.p
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="text-sm text-destructive"
-                >
+                <motion.p initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="text-sm text-destructive">
                   {error}
                 </motion.p>
               )}
             </AnimatePresence>
-
-            <Button
-              onClick={handleLogin}
-              disabled={loading || !key.trim()}
-              className="w-full h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                      fill="none"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                    />
-                  </svg>
-                  Verifying...
-                </span>
-              ) : (
-                "Sign In"
-              )}
+            <Button onClick={handleLogin} disabled={loading || !key.trim()} className="w-full h-10 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer">
+              {loading ? <span className="flex items-center gap-2"><Spinner className="h-4 w-4" />Verifying...</span> : "Sign In"}
             </Button>
           </CardContent>
         </Card>
       </motion.div>
     </div>
+  );
+}
+
+function ManageSubscription({ adminKey }: { adminKey: string }) {
+  const [lookupEmail, setLookupEmail] = useState("");
+  const [userData, setUserData] = useState<UserSubscriptionData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [changing, setChanging] = useState(false);
+  const [changePlan, setChangePlan] = useState("pro30");
+  const [changeDays, setChangeDays] = useState("");
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const client = api(adminKey);
+
+  const handleLookup = async () => {
+    if (!lookupEmail.trim()) return;
+    setLoading(true);
+    setMessage(null);
+    setUserData(null);
+    try {
+      const data = await client.getUserSubscription(lookupEmail.trim());
+      setUserData(data);
+    } catch (err) {
+      setMessage({ type: "error", text: err instanceof Error ? err.message : "Failed to lookup user" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChangePlan = async (projectId?: string) => {
+    if (!userData) return;
+    setChanging(true);
+    setMessage(null);
+    try {
+      const days = changeDays ? parseInt(changeDays) : undefined;
+      await client.changeSubscription(userData.email, changePlan, days, projectId);
+      setMessage({ type: "success", text: `Changed to ${PLAN_LABELS[changePlan] || changePlan}${projectId ? ` for project ${projectId.slice(0, 8)}...` : " for all projects"}` });
+      // Refresh data
+      const data = await client.getUserSubscription(userData.email);
+      setUserData(data);
+    } catch (err) {
+      setMessage({ type: "error", text: err instanceof Error ? err.message : "Failed to change plan" });
+    } finally {
+      setChanging(false);
+    }
+  };
+
+  // Helper: get activation status for a project+module
+  const getActivationStatus = (projectId: string, module: string): string | null => {
+    if (!userData) return null;
+    const act = userData.module_activations.find(
+      (a: Record<string, unknown>) => a.project_id === projectId && a.module_code === module
+    );
+    return (act?.status as string) || null;
+  };
+
+  const getTrialEndsAt = (projectId: string, module: string): string | null => {
+    if (!userData) return null;
+    const act = userData.module_activations.find(
+      (a: Record<string, unknown>) => a.project_id === projectId && a.module_code === module
+    );
+    return (act?.trial_ends_at as string) || null;
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <Card className="border-border/40 bg-card/60 backdrop-blur-sm">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-base font-bold tracking-tight flex items-center gap-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            Manage User Subscription
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Lookup */}
+          <div className="flex gap-3">
+            <div className="flex-1 space-y-1.5">
+              <Label className="text-sm font-semibold text-muted-foreground">User Email</Label>
+              <Input
+                type="email"
+                placeholder="user@example.com"
+                value={lookupEmail}
+                onChange={(e) => setLookupEmail(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLookup()}
+                className="bg-background/50 border-border/60 h-9 focus-visible:ring-primary/40"
+              />
+            </div>
+            <div className="flex items-end">
+              <Button
+                onClick={handleLookup}
+                disabled={loading || !lookupEmail.trim()}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold h-9 px-5 cursor-pointer"
+              >
+                {loading ? <span className="flex items-center gap-2"><Spinner />Looking up...</span> : "Lookup User"}
+              </Button>
+            </div>
+          </div>
+
+          <AnimatePresence>
+            {message && (
+              <motion.p
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className={`text-sm ${message.type === "success" ? "text-emerald-600" : "text-destructive"}`}
+              >
+                {message.text}
+              </motion.p>
+            )}
+          </AnimatePresence>
+
+          {/* User Details */}
+          {userData && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-3"
+            >
+              <div className="flex items-center gap-3 px-3 py-2 rounded-md bg-muted/30 border border-border/30">
+                <div className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                  <span className="text-sm font-bold text-primary uppercase">{userData.email[0]}</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate">{userData.email}</p>
+                  <p className="text-xs text-muted-foreground font-mono">{userData.account_id}</p>
+                </div>
+                <span className="text-sm text-muted-foreground font-semibold">{userData.projects.length} project{userData.projects.length !== 1 ? "s" : ""}</span>
+              </div>
+
+              {/* Projects with status */}
+              <div className="space-y-1.5">
+                {userData.projects.map((proj) => {
+                  const blogStatus = getActivationStatus(proj.id, "blog");
+                  const seoStatus = getActivationStatus(proj.id, "localseo");
+                  const blogExpiry = getTrialEndsAt(proj.id, "blog");
+                  const blogCount = userData.blog_generation_counts[proj.id] || 0;
+
+                  return (
+                    <div key={proj.id} className="px-3 py-2 rounded-md bg-muted/20 border border-border/20 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold truncate">{proj.name}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{proj.id}</p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleChangePlan(proj.id)}
+                          disabled={changing}
+                          className="h-7 px-3 text-xs font-semibold cursor-pointer shrink-0"
+                        >
+                          {changing ? <Spinner /> : "Apply to This"}
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {blogStatus && (
+                          <Badge className={`text-xs px-2 py-0.5 font-semibold ${PLAN_BADGE_COLORS[blogStatus] || "bg-muted"}`}>
+                            blog: {blogStatus}
+                          </Badge>
+                        )}
+                        {seoStatus && (
+                          <Badge className={`text-xs px-2 py-0.5 font-semibold ${PLAN_BADGE_COLORS[seoStatus] || "bg-muted"}`}>
+                            localseo: {seoStatus}
+                          </Badge>
+                        )}
+                        <span className="text-xs text-muted-foreground font-semibold">
+                          {blogCount} blog{blogCount !== 1 ? "s" : ""} generated
+                        </span>
+                        {blogExpiry && (
+                          <span className="text-xs text-muted-foreground">
+                            expires {new Date(blogExpiry).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Change Plan Controls */}
+              <div className="flex items-end gap-3 pt-1">
+                <div className="w-[180px] space-y-1.5">
+                  <Label className="text-sm font-semibold text-muted-foreground">New Plan</Label>
+                  <Select value={changePlan} onValueChange={setChangePlan}>
+                    <SelectTrigger className="bg-background/50 border-border/60 h-9 cursor-pointer">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border/60">
+                      <SelectItem value="trial" className="cursor-pointer">Trial (3 blogs)</SelectItem>
+                      <SelectItem value="pro30" className="cursor-pointer">Pro 30 (30 blogs)</SelectItem>
+                      <SelectItem value="active" className="cursor-pointer">Active (unlimited)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[120px] space-y-1.5">
+                  <Label className="text-sm font-semibold text-muted-foreground">Days (optional)</Label>
+                  <Input
+                    type="number"
+                    placeholder="auto"
+                    value={changeDays}
+                    onChange={(e) => setChangeDays(e.target.value)}
+                    className="bg-background/50 border-border/60 h-9 focus-visible:ring-primary/40"
+                  />
+                </div>
+                <Button
+                  onClick={() => handleChangePlan()}
+                  disabled={changing}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold h-9 px-5 cursor-pointer"
+                >
+                  {changing ? <span className="flex items-center gap-2"><Spinner />Applying...</span> : "Apply to All Projects"}
+                </Button>
+              </div>
+            </motion.div>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }
 
@@ -226,6 +453,7 @@ function Dashboard({
   const [email, setEmail] = useState("");
   const [projectId, setProjectId] = useState("");
   const [days, setDays] = useState("7");
+  const [plan, setPlan] = useState("trial");
   const [granting, setGranting] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [message, setMessage] = useState<{
@@ -258,11 +486,11 @@ function Dashboard({
     setGranting(true);
     setMessage(null);
     try {
-      const result = await client.grantDemo(email.trim(), parseInt(days), projectId.trim() || undefined);
+      const result = await client.grantDemo(email.trim(), parseInt(days), plan, projectId.trim() || undefined);
       const projectNote = result.project_id ? ` (project: ${result.project_id.slice(0, 8)}...)` : '';
       setMessage({
         type: "success",
-        text: `Demo access granted to ${email.trim()} for ${days} days${projectNote}`,
+        text: `${PLAN_LABELS[plan] || plan} access granted to ${email.trim()} for ${days} days${projectNote}`,
       });
       setEmail("");
       setProjectId("");
@@ -305,13 +533,9 @@ function Dashboard({
         <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
-              <span className="text-primary-foreground text-xs font-black">
-                S
-              </span>
+              <span className="text-primary-foreground text-xs font-black">S</span>
             </div>
-            <span className="font-bold text-sm tracking-tight">
-              theStacc Admin
-            </span>
+            <span className="font-bold text-sm tracking-tight">theStacc Admin</span>
           </div>
           <Button
             variant="outline"
@@ -335,34 +559,19 @@ function Dashboard({
           <Card className="border-border/40 bg-card/60 backdrop-blur-sm">
             <CardHeader className="pb-4">
               <CardTitle className="text-base font-bold tracking-tight flex items-center gap-2">
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="text-primary"
-                >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
                   <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
                   <circle cx="9" cy="7" r="4" />
                   <line x1="19" x2="19" y1="8" y2="14" />
                   <line x1="22" x2="16" y1="11" y2="11" />
                 </svg>
-                Grant Demo Access
+                Grant Access
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex gap-3">
                 <div className="flex-1 space-y-1.5">
-                  <Label
-                    htmlFor="email"
-                    className="text-sm font-semibold text-muted-foreground"
-                  >
-                    Customer Email
-                  </Label>
+                  <Label htmlFor="email" className="text-sm font-semibold text-muted-foreground">Customer Email</Label>
                   <Input
                     id="email"
                     type="email"
@@ -374,12 +583,7 @@ function Dashboard({
                   />
                 </div>
                 <div className="flex-1 space-y-1.5">
-                  <Label
-                    htmlFor="project-id"
-                    className="text-sm font-semibold text-muted-foreground"
-                  >
-                    Project ID (optional)
-                  </Label>
+                  <Label htmlFor="project-id" className="text-sm font-semibold text-muted-foreground">Project ID (optional)</Label>
                   <Input
                     id="project-id"
                     type="text"
@@ -390,10 +594,23 @@ function Dashboard({
                     className="bg-background/50 border-border/60 h-9 focus-visible:ring-primary/40"
                   />
                 </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="w-[180px] space-y-1.5">
+                  <Label className="text-sm font-semibold text-muted-foreground">Plan</Label>
+                  <Select value={plan} onValueChange={setPlan}>
+                    <SelectTrigger className="bg-background/50 border-border/60 h-9 cursor-pointer">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border/60">
+                      <SelectItem value="trial" className="cursor-pointer">Trial (3 blogs)</SelectItem>
+                      <SelectItem value="pro30" className="cursor-pointer">Pro 30 (30 blogs)</SelectItem>
+                      <SelectItem value="active" className="cursor-pointer">Active (unlimited)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="w-[140px] space-y-1.5">
-                  <Label className="text-sm font-semibold text-muted-foreground">
-                    Trial Duration
-                  </Label>
+                  <Label className="text-sm font-semibold text-muted-foreground">Duration</Label>
                   <Select value={days} onValueChange={setDays}>
                     <SelectTrigger className="bg-background/50 border-border/60 h-9 cursor-pointer">
                       <SelectValue />
@@ -403,6 +620,8 @@ function Dashboard({
                       <SelectItem value="7" className="cursor-pointer">7 days</SelectItem>
                       <SelectItem value="14" className="cursor-pointer">14 days</SelectItem>
                       <SelectItem value="30" className="cursor-pointer">30 days</SelectItem>
+                      <SelectItem value="90" className="cursor-pointer">90 days</SelectItem>
+                      <SelectItem value="365" className="cursor-pointer">1 year</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -414,32 +633,7 @@ function Dashboard({
                   disabled={granting || !email.trim()}
                   className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold h-9 px-5 cursor-pointer"
                 >
-                  {granting ? (
-                    <span className="flex items-center gap-2">
-                      <svg
-                        className="animate-spin h-3.5 w-3.5"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                          fill="none"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                        />
-                      </svg>
-                      Granting...
-                    </span>
-                  ) : (
-                    "Grant Demo Access"
-                  )}
+                  {granting ? <span className="flex items-center gap-2"><Spinner />Granting...</span> : "Grant Access"}
                 </Button>
 
                 <AnimatePresence>
@@ -459,6 +653,9 @@ function Dashboard({
           </Card>
         </motion.div>
 
+        {/* Manage User Subscription */}
+        <ManageSubscription adminKey={adminKey} />
+
         {/* Demo Accounts */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
@@ -471,17 +668,7 @@ function Dashboard({
         >
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-muted-foreground"
-              >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground">
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
                 <circle cx="9" cy="7" r="4" />
                 <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
@@ -498,40 +685,12 @@ function Dashboard({
 
           {loadingAccounts ? (
             <div className="flex items-center justify-center py-12">
-              <svg
-                className="animate-spin h-5 w-5 text-muted-foreground"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                  fill="none"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                />
-              </svg>
+              <Spinner className="h-5 w-5 text-muted-foreground" />
             </div>
           ) : accounts.length === 0 ? (
             <Card className="border-border/30 bg-card/30">
               <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <svg
-                  width="32"
-                  height="32"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mb-3 opacity-40"
-                >
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-3 opacity-40">
                   <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
                   <circle cx="9" cy="7" r="4" />
                   <line x1="17" x2="23" y1="11" y2="11" />
@@ -554,33 +713,18 @@ function Dashboard({
                 >
                   <Card className="border-border/30 bg-card/40 hover:bg-card/60 transition-colors">
                     <CardContent className="py-3 px-4 space-y-0">
-                      {/* Header row: avatar + email + dates + status + revoke */}
+                      {/* Header row */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4 min-w-0">
                           <div className="w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                            <span className="text-sm font-bold text-primary uppercase">
-                              {account.email[0]}
-                            </span>
+                            <span className="text-sm font-bold text-primary uppercase">{account.email[0]}</span>
                           </div>
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold truncate">
-                              {account.email}
-                            </p>
+                            <p className="text-sm font-semibold truncate">{account.email}</p>
                             <p className="text-sm text-muted-foreground font-semibold">
-                              {new Date(account.granted_at).toLocaleDateString(
-                                "en-US",
-                                {
-                                  month: "short",
-                                  day: "numeric",
-                                }
-                              )}{" "}
-                              &rarr;{" "}
-                              {new Date(
-                                account.trial_ends_at
-                              ).toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                              })}
+                              {new Date(account.granted_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                              {" "}&rarr;{" "}
+                              {new Date(account.trial_ends_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                             </p>
                           </div>
                         </div>
@@ -602,36 +746,13 @@ function Dashboard({
                             disabled={revoking === account.email}
                             className="text-destructive border-destructive/30 hover:bg-destructive/10 h-7 px-3 text-sm font-semibold cursor-pointer"
                           >
-                            {revoking === account.email ? (
-                              <svg
-                                className="animate-spin h-3.5 w-3.5"
-                                viewBox="0 0 24 24"
-                              >
-                                <circle
-                                  className="opacity-25"
-                                  cx="12"
-                                  cy="12"
-                                  r="10"
-                                  stroke="currentColor"
-                                  strokeWidth="4"
-                                  fill="none"
-                                />
-                                <path
-                                  className="opacity-75"
-                                  fill="currentColor"
-                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                                />
-                              </svg>
-                            ) : (
-                              "Revoke"
-                            )}
+                            {revoking === account.email ? <Spinner /> : "Revoke"}
                           </Button>
                         </div>
                       </div>
 
-                      {/* Project rows */}
+                      {/* Project rows with plan badges */}
                       {(() => {
-                        // Group modules by project
                         const projectRows: { projectName: string | null; projectId: string | null; modules: DemoModule[] }[] = [];
                         const byProject = new Map<string, DemoModule[]>();
                         const accountLevel: DemoModule[] = [];
@@ -654,11 +775,7 @@ function Dashboard({
                           });
                         }
                         if (accountLevel.length > 0) {
-                          projectRows.push({
-                            projectName: null,
-                            projectId: null,
-                            modules: accountLevel,
-                          });
+                          projectRows.push({ projectName: null, projectId: null, modules: accountLevel });
                         }
 
                         if (projectRows.length === 0) return null;
@@ -680,10 +797,9 @@ function Dashboard({
                                   {row.modules.map((m, mi) => (
                                     <Badge
                                       key={`${m.module}-${mi}`}
-                                      variant="secondary"
-                                      className="text-xs px-2 py-0.5 font-semibold"
+                                      className={`text-xs px-2 py-0.5 font-semibold ${PLAN_BADGE_COLORS[m.status] || "bg-muted"}`}
                                     >
-                                      {m.module}
+                                      {m.module}: {m.status}
                                     </Badge>
                                   ))}
                                 </div>
