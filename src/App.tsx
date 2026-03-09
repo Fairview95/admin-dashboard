@@ -405,7 +405,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleApply(hasSubscriptions ? "change" : "grant", proj.id)}
+                              onClick={() => handleApply((blogAct || seoAct) ? "change" : "grant", proj.id)}
                               disabled={actingProject !== null}
                               className="h-7 px-3 text-xs cursor-pointer"
                             >
