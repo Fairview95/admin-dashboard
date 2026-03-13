@@ -62,9 +62,9 @@ interface UserSubscriptionData {
 // --- Constants ---
 
 const PLAN_LABELS: Record<string, string> = {
-  trial: "Trial (3 blogs)",
-  pro30: "Pro 30 (30 blogs)",
-  active: "Active (unlimited)",
+  trial: "Trial",
+  pro30: "Pro 30",
+  active: "Active",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -101,8 +101,8 @@ function api(key: string) {
   }
 
   return {
-    async grantDemo(email: string, days: number, plan: string, projectId?: string) {
-      const body: Record<string, unknown> = { email, days, plan, modules: ["blog", "localseo"] };
+    async grantDemo(email: string, days: number, plan: string, projectId?: string, modules: string[] = ["blog", "localseo"]) {
+      const body: Record<string, unknown> = { email, days, plan, modules };
       if (projectId) body.project_id = projectId;
       const res = await fetch(`${API_URL}/api/v1/admin/grant-demo`, {
         method: "POST",
@@ -129,8 +129,8 @@ function api(key: string) {
       );
       return handleResponse(res);
     },
-    async changeSubscription(email: string, plan: string, days?: number, projectId?: string) {
-      const body: Record<string, unknown> = { email, plan, modules: ["blog", "localseo"] };
+    async changeSubscription(email: string, plan: string, days?: number, projectId?: string, modules: string[] = ["blog", "localseo"]) {
+      const body: Record<string, unknown> = { email, plan, modules };
       if (days) body.days = days;
       if (projectId) body.project_id = projectId;
       const res = await fetch(`${API_URL}/api/v1/admin/change-subscription`, {
@@ -222,6 +222,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   // Plan action state
   const [plan, setPlan] = useState("pro30");
   const [days, setDays] = useState("");
+  const [selectedModules, setSelectedModules] = useState<string[]>(["blog", "localseo", "social"]);
   const [actingProject, setActingProject] = useState<string | null>(null); // null = not acting, "all" = apply all, project_id = specific
 
   // Demo accounts state
@@ -267,9 +268,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     try {
       const d = days ? parseInt(days) : undefined;
       if (mode === "grant") {
-        await client.grantDemo(email.trim(), d || 30, plan, projectId);
+        await client.grantDemo(email.trim(), d || 30, plan, projectId, selectedModules);
       } else {
-        await client.changeSubscription(email.trim(), plan, d, projectId);
+        await client.changeSubscription(email.trim(), plan, d, projectId, selectedModules);
       }
       const label = projectId ? `project ${projectId.slice(0, 8)}...` : "all projects";
       setLookupMsg({ type: "success", text: `${PLAN_LABELS[plan]} applied to ${label}` });
@@ -363,6 +364,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                       <th className="text-left px-4 py-2 font-medium">Project</th>
                       <th className="text-left px-4 py-2 font-medium">Blog</th>
                       <th className="text-left px-4 py-2 font-medium">LocalSEO</th>
+                      <th className="text-left px-4 py-2 font-medium">Social</th>
                       <th className="text-left px-4 py-2 font-medium">Blogs</th>
                       <th className="text-left px-4 py-2 font-medium">Expires</th>
                       <th className="text-right px-4 py-2 font-medium"></th>
@@ -372,9 +374,11 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                     {userData.projects.map((proj) => {
                       const blogAct = getActivation(proj.id, "blog");
                       const seoAct = getActivation(proj.id, "localseo");
+                      const socialAct = getActivation(proj.id, "social");
                       const blogStatus = (blogAct?.status as string) || null;
                       const seoStatus = (seoAct?.status as string) || null;
-                      const blogExpiry = (blogAct?.trial_ends_at as string) || (seoAct?.trial_ends_at as string) || null;
+                      const socialStatus = (socialAct?.status as string) || null;
+                      const blogExpiry = (blogAct?.trial_ends_at as string) || (seoAct?.trial_ends_at as string) || (socialAct?.trial_ends_at as string) || null;
                       const blogCount = userData.blog_generation_counts[proj.id] || 0;
 
                       return (
@@ -397,6 +401,13 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               </Badge>
                             ) : <span className="text-muted-foreground">—</span>}
                           </td>
+                          <td className="px-4 py-2.5">
+                            {socialStatus ? (
+                              <Badge className={`text-xs font-medium border-0 ${STATUS_COLORS[socialStatus] || "bg-muted"}`}>
+                                {socialStatus}
+                              </Badge>
+                            ) : <span className="text-muted-foreground">—</span>}
+                          </td>
                           <td className="px-4 py-2.5 text-muted-foreground">{blogCount}</td>
                           <td className="px-4 py-2.5 text-muted-foreground text-xs">
                             {blogExpiry ? fmtDate(blogExpiry) : "—"}
@@ -405,8 +416,8 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleApply((blogAct || seoAct) ? "change" : "grant", proj.id)}
-                              disabled={actingProject !== null}
+                              onClick={() => handleApply((blogAct || seoAct || socialAct) ? "change" : "grant", proj.id)}
+                              disabled={actingProject !== null || selectedModules.length === 0}
                               className="h-7 px-3 text-xs cursor-pointer"
                             >
                               {actingProject === proj.id ? <Spinner /> : "Apply"}
@@ -420,15 +431,33 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
               )}
 
               {/* Action bar */}
-              <div className="px-4 py-3 bg-muted/20 border-t border-border flex items-center gap-3">
+              <div className="px-4 py-3 bg-muted/20 border-t border-border flex items-center gap-3 flex-wrap">
+                {/* Module checkboxes */}
+                <div className="flex items-center gap-3 mr-1">
+                  {(["blog", "localseo", "social"] as const).map((mod) => (
+                    <label key={mod} className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={selectedModules.includes(mod)}
+                        onChange={() =>
+                          setSelectedModules((prev) =>
+                            prev.includes(mod) ? prev.filter((m) => m !== mod) : [...prev, mod]
+                          )
+                        }
+                        className="accent-primary h-3.5 w-3.5 cursor-pointer"
+                      />
+                      {mod === "blog" ? "Blog" : mod === "localseo" ? "LocalSEO" : "Social"}
+                    </label>
+                  ))}
+                </div>
                 <Select value={plan} onValueChange={setPlan}>
-                  <SelectTrigger className="w-[170px] h-8 text-xs cursor-pointer">
+                  <SelectTrigger className="w-[120px] h-8 text-xs cursor-pointer">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="trial" className="cursor-pointer">Trial (3 blogs)</SelectItem>
-                    <SelectItem value="pro30" className="cursor-pointer">Pro 30 (30 blogs)</SelectItem>
-                    <SelectItem value="active" className="cursor-pointer">Active (unlimited)</SelectItem>
+                    <SelectItem value="trial" className="cursor-pointer">Trial</SelectItem>
+                    <SelectItem value="pro30" className="cursor-pointer">Pro 30</SelectItem>
+                    <SelectItem value="active" className="cursor-pointer">Active</SelectItem>
                   </SelectContent>
                 </Select>
                 <Input
@@ -441,7 +470,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                 <Button
                   size="sm"
                   onClick={() => handleApply(hasSubscriptions ? "change" : "grant")}
-                  disabled={actingProject !== null}
+                  disabled={actingProject !== null || selectedModules.length === 0}
                   className="h-8 px-4 text-xs cursor-pointer"
                 >
                   {actingProject === "all" ? <Spinner /> : "Apply to All"}
