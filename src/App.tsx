@@ -101,7 +101,7 @@ function api(key: string) {
   }
 
   return {
-    async grantDemo(email: string, days: number, plan: string, projectId?: string, modules: string[] = ["blog", "localseo"]) {
+    async grantDemo(email: string, days: number, plan: string, projectId?: string, modules: string[] = ["blog", "localseo", "social"]) {
       const body: Record<string, unknown> = { email, days, plan, modules };
       if (projectId) body.project_id = projectId;
       const res = await fetch(`${API_URL}/api/v1/admin/grant-demo`, {
@@ -129,7 +129,7 @@ function api(key: string) {
       );
       return handleResponse(res);
     },
-    async changeSubscription(email: string, plan: string, days?: number, projectId?: string, modules: string[] = ["blog", "localseo"]) {
+    async changeSubscription(email: string, plan: string, days?: number, projectId?: string, modules: string[] = ["blog", "localseo", "social"]) {
       const body: Record<string, unknown> = { email, plan, modules };
       if (days) body.days = days;
       if (projectId) body.project_id = projectId;
