@@ -298,11 +298,17 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     }
   };
 
-  // Helper: get activation for a project+module
+  // Helper: get activation for a project+module (try project-level first, fall back to account-level)
   const getActivation = (projectId: string, module: string) => {
     if (!userData) return null;
-    return userData.module_activations.find(
+    // Try project-level match first
+    const projectLevel = userData.module_activations.find(
       (a: Record<string, unknown>) => a.project_id === projectId && a.module_code === module
+    );
+    if (projectLevel) return projectLevel as Record<string, unknown>;
+    // Fall back to account-level (project_id is null)
+    return userData.module_activations.find(
+      (a: Record<string, unknown>) => a.project_id === null && a.module_code === module
     ) as Record<string, unknown> | undefined;
   };
 
