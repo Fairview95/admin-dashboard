@@ -90,6 +90,7 @@ interface UsageData {
   total_output_tokens: number;
   total_images: number;
   total_api_calls: number;
+  total_row_count: number;
   truncated: boolean;
   projects: UsageProject[];
 }
@@ -623,7 +624,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
 
               {usageData.truncated && (
                 <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Results truncated to 5,000 records. Totals may be incomplete — narrow the date range or filter by email.
+                  Showing 5,000 of {usageData.total_row_count.toLocaleString()} records. Totals below are incomplete — narrow the date range or filter by email for accurate numbers.
                 </p>
               )}
 
