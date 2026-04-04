@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +59,39 @@ interface UserSubscriptionData {
   blog_generation_counts: Record<string, number>;
   social_posts_counts: Record<string, number>;
   localseo_posts_counts: Record<string, number>;
+}
+
+interface UsageBreakdown {
+  input_tokens: number;
+  output_tokens: number;
+  images: number;
+  cost_usd: number;
+  count?: number;
+}
+
+interface UsageProject {
+  project_id: string;
+  project_name: string;
+  account_id: string;
+  email: string;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_images: number;
+  total_cost_usd: number;
+  by_service: Record<string, UsageBreakdown>;
+  by_provider: Record<string, UsageBreakdown>;
+  by_operation: Record<string, UsageBreakdown>;
+}
+
+interface UsageData {
+  period_days: number;
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_images: number;
+  total_api_calls: number;
+  truncated: boolean;
+  projects: UsageProject[];
 }
 
 // --- Constants ---
@@ -147,6 +180,14 @@ function api(key: string) {
         headers,
         body: JSON.stringify(body),
       });
+      return handleResponse(res);
+    },
+    async getUsage(params: { email?: string; project_id?: string; days?: number } = {}): Promise<UsageData> {
+      const searchParams = new URLSearchParams();
+      if (params.email) searchParams.set("email", params.email);
+      if (params.project_id) searchParams.set("project_id", params.project_id);
+      if (params.days) searchParams.set("days", params.days.toString());
+      const res = await fetch(`${API_URL}/api/v1/admin/usage?${searchParams}`, { headers });
       return handleResponse(res);
     },
   };
@@ -251,6 +292,14 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
 
   const [accountsError, setAccountsError] = useState<string | null>(null);
 
+  // Usage tracking state
+  const [usageData, setUsageData] = useState<UsageData | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageDays, setUsageDays] = useState("30");
+  const [usageEmail, setUsageEmail] = useState("");
+  const [usageSort, setUsageSort] = useState<"cost" | "tokens" | "images">("cost");
+
   const loadAccounts = useCallback(async () => {
     setAccountsError(null);
     try {
@@ -265,6 +314,22 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   }, [adminKey]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+
+  const loadUsage = useCallback(async (filterEmail?: string) => {
+    setUsageLoading(true);
+    setUsageError(null);
+    try {
+      const params: { email?: string; days?: number } = { days: parseInt(usageDays) || 30 };
+      if (filterEmail) params.email = filterEmail;
+      const data = await client.getUsage(params);
+      setUsageData(data);
+    } catch (err) {
+      setUsageError(err instanceof Error ? err.message : "Failed to load usage data");
+    } finally {
+      setUsageLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminKey, usageDays]);
 
   const handleLookup = async () => {
     if (!email.trim()) return;
@@ -337,6 +402,15 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       (a: Record<string, unknown>) => a.project_id === null && a.module_code === module
     ) as Record<string, unknown> | undefined;
   };
+
+  const sortedUsageProjects = useMemo(() => {
+    if (!usageData) return [];
+    return [...usageData.projects].sort((a, b) =>
+      usageSort === "cost" ? b.total_cost_usd - a.total_cost_usd :
+      usageSort === "tokens" ? (b.total_input_tokens + b.total_output_tokens) - (a.total_input_tokens + a.total_output_tokens) :
+      b.total_images - a.total_images
+    );
+  }, [usageData, usageSort]);
 
   const activeCount = accounts.filter((a) => !a.expired).length;
 
@@ -491,6 +565,137 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   </div>
                 );
               })}
+            </div>
+          )}
+        </section>
+
+        {/* ============ API USAGE TRACKING ============ */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">API Usage</h2>
+
+          <div className="flex gap-2 mb-3 items-end">
+            <Input
+              type="email"
+              placeholder="Filter by email (optional)"
+              value={usageEmail}
+              onChange={(e) => setUsageEmail(e.target.value)}
+              className="max-w-[240px] h-9"
+            />
+            <Select value={usageDays} onValueChange={setUsageDays}>
+              <SelectTrigger className="w-[120px] h-9 cursor-pointer">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7" className="cursor-pointer">Last 7 days</SelectItem>
+                <SelectItem value="30" className="cursor-pointer">Last 30 days</SelectItem>
+                <SelectItem value="90" className="cursor-pointer">Last 90 days</SelectItem>
+                <SelectItem value="365" className="cursor-pointer">Last year</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onClick={() => loadUsage(usageEmail.trim() || undefined)} disabled={usageLoading} className="h-9 px-4 cursor-pointer">
+              {usageLoading ? <Spinner /> : "Load Usage"}
+            </Button>
+          </div>
+
+          {usageError && <p className="text-sm text-destructive mb-3">{usageError}</p>}
+
+          {usageData && (
+            <div className="space-y-4">
+              {/* Summary cards */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Cost</p>
+                  <p className="text-xl font-semibold mt-1">${usageData.total_cost_usd.toFixed(2)}</p>
+                </div>
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">API Calls</p>
+                  <p className="text-xl font-semibold mt-1">{usageData.total_api_calls.toLocaleString()}</p>
+                </div>
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Tokens</p>
+                  <p className="text-xl font-semibold mt-1">{(usageData.total_input_tokens + usageData.total_output_tokens).toLocaleString()}</p>
+                </div>
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Images Generated</p>
+                  <p className="text-xl font-semibold mt-1">{usageData.total_images.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {usageData.truncated && (
+                <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Results truncated to 5,000 records. Totals may be incomplete — narrow the date range or filter by email.
+                </p>
+              )}
+
+              {/* Sort controls */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Sort by:</span>
+                {(["cost", "tokens", "images"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setUsageSort(s)}
+                    className={`text-xs px-2 py-1 rounded cursor-pointer ${usageSort === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+                  >
+                    {s === "cost" ? "Cost" : s === "tokens" ? "Tokens" : "Images"}
+                  </button>
+                ))}
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {usageData.projects.length} project{usageData.projects.length !== 1 ? "s" : ""} in last {usageData.period_days}d
+                </span>
+              </div>
+
+              {/* Per-project table */}
+              {usageData.projects.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No usage data for this period</p>
+              ) : (
+                <div className="border border-border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30 text-xs text-muted-foreground uppercase tracking-wider">
+                        <th className="text-left px-4 py-2 font-medium">Project</th>
+                        <th className="text-left px-4 py-2 font-medium">Email</th>
+                        <th className="text-right px-4 py-2 font-medium">Input Tokens</th>
+                        <th className="text-right px-4 py-2 font-medium">Output Tokens</th>
+                        <th className="text-right px-4 py-2 font-medium">Images</th>
+                        <th className="text-right px-4 py-2 font-medium">Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedUsageProjects.map((proj) => (
+                        <tr key={proj.project_id} className="border-b border-border last:border-0 hover:bg-muted/20 group">
+                          <td className="px-4 py-2.5">
+                            <div>
+                              <span className="font-medium">{proj.project_name}</span>
+                              <span className="text-xs text-muted-foreground ml-1.5 font-mono">{proj.project_id.slice(0, 8)}</span>
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              {Object.entries(proj.by_service).map(([svc, data]) => (
+                                <span key={svc} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                  {svc}: ${data.cost_usd.toFixed(2)}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-muted-foreground text-xs">{proj.email}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-xs">{proj.total_input_tokens.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-xs">{proj.total_output_tokens.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-xs">{proj.total_images}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold">${proj.total_cost_usd.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-border bg-muted/10 font-semibold text-xs">
+                        <td className="px-4 py-2" colSpan={2}>Total</td>
+                        <td className="px-4 py-2 text-right font-mono">{usageData.total_input_tokens.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right font-mono">{usageData.total_output_tokens.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right font-mono">{usageData.total_images}</td>
+                        <td className="px-4 py-2 text-right">${usageData.total_cost_usd.toFixed(2)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </section>
