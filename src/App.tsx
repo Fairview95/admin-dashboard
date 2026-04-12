@@ -183,6 +183,14 @@ function api(key: string) {
       });
       return handleResponse(res);
     },
+    async removeModule(email: string, projectId: string, module: string) {
+      const res = await fetch(`${API_URL}/api/v1/admin/remove-module`, {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({ email, project_id: projectId, module }),
+      });
+      return handleResponse(res);
+    },
     async getUsage(params: { email?: string; project_id?: string; days?: number } = {}): Promise<UsageData> {
       const searchParams = new URLSearchParams();
       if (params.email) searchParams.set("email", params.email);
@@ -279,6 +287,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [moduleDays, setModuleDays] = useState<Record<string, string>>({});
   const [actingOn, setActingOn] = useState<string | null>(null);
   const [applyConfirm, setApplyConfirm] = useState<{ projectId: string; module: string } | null>(null);
+  const [removeConfirm, setRemoveConfirm] = useState<{ projectId: string; module: string } | null>(null);
 
   const getPlan = (key: string) => modulePlans[key] || "pro30";
   const getDays = (key: string) => moduleDays[key] || "";
@@ -377,6 +386,25 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     }
   };
 
+  // Remove a single module activation from a project
+  const handleRemoveModule = async (projectId: string, module: string) => {
+    if (!email.trim()) return;
+    const key = `${projectId}:${module}`;
+    setActingOn(key);
+    setLookupMsg(null);
+    try {
+      await client.removeModule(email.trim(), projectId, module);
+      setLookupMsg({ type: "success", text: `${MODULE_LABELS[module]} removed from project` });
+      const data = await client.getUserSubscription(email.trim());
+      setUserData(data);
+      loadAccounts();
+    } catch (err) {
+      setLookupMsg({ type: "error", text: err instanceof Error ? err.message : "Failed to remove module" });
+    } finally {
+      setActingOn(null);
+    }
+  };
+
   const handleRevoke = async (accountEmail: string) => {
     setRevokeConfirm(null);
     setRevoking(accountEmail);
@@ -401,6 +429,14 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     // Fall back to account-level (project_id is null)
     return userData.module_activations.find(
       (a: Record<string, unknown>) => a.project_id === null && a.module_code === module
+    ) as Record<string, unknown> | undefined;
+  };
+
+  // Helper: get subscription for a project+module (for period end date display)
+  const getSubscription = (projectId: string, module: string) => {
+    if (!userData) return null;
+    return userData.subscriptions.find(
+      (s: Record<string, unknown>) => s.project_id === projectId && s.module_name === module
     ) as Record<string, unknown> | undefined;
   };
 
@@ -488,8 +524,13 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                       <tbody>
                         {(["blog", "localseo", "social"] as const).map((mod) => {
                           const act = getActivation(proj.id, mod);
+                          const sub = getSubscription(proj.id, mod);
                           const modStatus = (act?.status as string) || null;
-                          const modExpiry = (act?.trial_ends_at as string) || null;
+                          const actExpiry = (act?.trial_ends_at as string) || null;
+                          // Show subscription period end (when the billing cycle ends)
+                          // Falls back to activation trial_ends_at for display
+                          const subPeriodEnd = (sub?.current_period_end as string) || null;
+                          const displayExpiry = subPeriodEnd || actExpiry;
                           const isAccountLevel = act ? act.project_id === null : false;
                           const key = `${proj.id}:${mod}`;
                           const isActing = actingOn === key;
@@ -499,9 +540,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                             ? (userData.social_posts_counts?.[proj.id] || 0)
                             : (userData.localseo_posts_counts?.[proj.id] || 0);
 
-                          // Check if expired: trial_ends_at is in the past (for trial/pro30 plans)
-                          // "active" plans have trial_ends_at=null, so isExpired is correctly false
-                          const isExpired = modExpiry ? new Date(modExpiry) < new Date() : false;
+                          // Expired = activation trial_ends_at is in the past (NOT subscription period end).
+                          // "active" plans have trial_ends_at=null → never expired.
+                          const isExpired = actExpiry ? new Date(actExpiry) < new Date() : false;
                           const displayStatus = modStatus && isExpired ? "expired" : modStatus;
 
                           return (
@@ -519,7 +560,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               </td>
                               <td className="px-4 py-2 text-muted-foreground">{modCount}</td>
                               <td className={`px-4 py-2 text-xs ${isExpired ? "text-red-500 font-medium" : "text-muted-foreground"}`}>
-                                {modExpiry ? fmtDate(modExpiry) : "—"}
+                                {displayExpiry ? fmtDate(displayExpiry) : "—"}
                               </td>
                               <td className="px-4 py-2">
                                 <Select value={getPlan(key)} onValueChange={(v) => setPlan(key, v)}>
@@ -549,14 +590,27 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                                 />
                               </td>
                               <td className="px-4 py-2 text-right">
-                                <Button
-                                  size="sm"
-                                  onClick={() => setApplyConfirm({ projectId: proj.id, module: mod })}
-                                  disabled={actingOn !== null}
-                                  className="h-7 px-3 text-xs cursor-pointer"
-                                >
-                                  {isActing ? <Spinner /> : "Apply"}
-                                </Button>
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => setApplyConfirm({ projectId: proj.id, module: mod })}
+                                    disabled={actingOn !== null}
+                                    className="h-7 px-3 text-xs cursor-pointer"
+                                  >
+                                    {isActing ? <Spinner /> : "Apply"}
+                                  </Button>
+                                  {modStatus && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setRemoveConfirm({ projectId: proj.id, module: mod })}
+                                      disabled={actingOn !== null}
+                                      className="h-7 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                                    >
+                                      {isActing ? <Spinner /> : "×"}
+                                    </Button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -817,6 +871,40 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
               className="cursor-pointer"
             >
               Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Remove module confirm dialog */}
+      <AlertDialog open={!!removeConfirm} onOpenChange={(open) => !open && setRemoveConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Module</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeConfirm && (
+                <>
+                  This will remove{" "}
+                  <span className="font-semibold text-foreground">{MODULE_LABELS[removeConfirm.module]}</span>{" "}
+                  from this project for{" "}
+                  <span className="font-semibold text-foreground">{userData?.email}</span>.
+                  {" "}The module's subscription and activation will be deleted. The user will no longer see this module in their sidebar.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (removeConfirm) {
+                  handleRemoveModule(removeConfirm.projectId, removeConfirm.module);
+                  setRemoveConfirm(null);
+                }
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 cursor-pointer"
+            >
+              Remove Module
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
