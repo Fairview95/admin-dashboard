@@ -271,6 +271,15 @@ function fmtShortDate(d: string) {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// Provider color classes — summary bar uses bordered variant, row badges use lighter variant
+const PROVIDER_COLORS: Record<string, { summary: string; row: string }> = {
+  claude:  { summary: "bg-orange-100 text-orange-700 border-orange-200", row: "bg-orange-50 text-orange-600" },
+  gemini:  { summary: "bg-blue-100 text-blue-700 border-blue-200",     row: "bg-blue-50 text-blue-600" },
+  bfl:     { summary: "bg-purple-100 text-purple-700 border-purple-200", row: "bg-purple-50 text-purple-600" },
+  fal:     { summary: "bg-green-100 text-green-700 border-green-200",   row: "bg-green-50 text-green-600" },
+  recraft: { summary: "bg-pink-100 text-pink-700 border-pink-200",     row: "bg-pink-50 text-pink-600" },
+};
+
 // --- Dashboard ---
 
 function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => void }) {
@@ -676,6 +685,33 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                 </div>
               </div>
 
+              {/* Provider cost breakdown */}
+              {(() => {
+                const providerTotals: Record<string, { cost: number; images: number }> = {};
+                for (const proj of usageData.projects) {
+                  for (const [prov, data] of Object.entries(proj.by_provider)) {
+                    if (!providerTotals[prov]) providerTotals[prov] = { cost: 0, images: 0 };
+                    providerTotals[prov].cost += data.cost_usd;
+                    providerTotals[prov].images += data.images;
+                  }
+                }
+                const providers = Object.entries(providerTotals).sort((a, b) => b[1].cost - a[1].cost);
+                if (providers.length === 0) return null;
+                return (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-muted-foreground uppercase tracking-wider">By Provider:</span>
+                    {providers.map(([prov, data]) => (
+                      <span
+                        key={prov}
+                        className={`text-xs px-2 py-1 rounded border ${PROVIDER_COLORS[prov]?.summary || "bg-muted text-muted-foreground border-border"}`}
+                      >
+                        {prov}: ${data.cost.toFixed(2)} · {data.images} img
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
+
               {usageData.truncated && (
                 <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   Showing 5,000 of {usageData.total_row_count.toLocaleString()} records. Totals below are incomplete — narrow the date range or filter by email for accurate numbers.
@@ -723,10 +759,16 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               <span className="font-medium">{proj.project_name}</span>
                               <span className="text-xs text-muted-foreground ml-1.5 font-mono">{proj.project_id.slice(0, 8)}</span>
                             </div>
-                            <div className="flex gap-1 mt-1">
+                            <div className="flex gap-1 mt-1 flex-wrap">
                               {Object.entries(proj.by_service).map(([svc, data]) => (
                                 <span key={svc} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
                                   {svc}: ${data.cost_usd.toFixed(2)}
+                                </span>
+                              ))}
+                              <span className="text-[10px] text-muted-foreground/40 mx-0.5">|</span>
+                              {Object.entries(proj.by_provider).map(([prov, data]) => (
+                                <span key={prov} className={`text-[10px] px-1.5 py-0.5 rounded ${PROVIDER_COLORS[prov]?.row || "bg-muted text-muted-foreground"}`}>
+                                  {prov}: ${data.cost_usd.toFixed(2)}{data.images > 0 ? ` · ${data.images}img` : ""}
                                 </span>
                               ))}
                             </div>
