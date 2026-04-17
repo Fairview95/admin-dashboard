@@ -20,8 +20,17 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const API_URL =
-  import.meta.env.VITE_API_URL || "https://api.thestacc.com/core";
+// VITE_API_URL must be set explicitly. Previously fell back to the
+// production URL if missing, which meant a forgotten dev .env silently
+// pointed the dev app at prod — admin actions you thought were local
+// would grant real subscriptions. Fail loud instead.
+const API_URL = import.meta.env.VITE_API_URL;
+if (!API_URL) {
+  throw new Error(
+    "VITE_API_URL is not set. Add it to .env.local (e.g. " +
+    "VITE_API_URL=http://localhost:8000/core)."
+  );
+}
 
 // --- Types ---
 
@@ -139,11 +148,26 @@ function api(key: string) {
       const data = await res.json().catch(() => null);
       throw new Error(data?.detail || `Error ${res.status}`);
     }
-    return res.json();
+    // Handle empty bodies (204 No Content, or zero-length 200) so future
+    // endpoints that don't return JSON don't break callers.
+    if (res.status === 204) return null;
+    const text = await res.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error("Server returned invalid JSON");
+    }
   }
 
   return {
-    async grantDemo(email: string, plan: string, projectId?: string, modules: string[] = ["blog", "localseo", "social"], days?: number) {
+    async grantDemo(email: string, plan: string, projectId?: string, modules: string[] = [], days?: number) {
+      // Caller MUST pass `modules` — defaulting to all three caused users
+      // to see modules in their sidebar that they never set up. Backend
+      // also enforces this with a 400 if empty.
+      if (!modules.length) {
+        throw new Error("Pick at least one module to grant.");
+      }
       const body: Record<string, unknown> = { email, plan, modules };
       if (days !== undefined) body.days = days;
       if (projectId) body.project_id = projectId;
@@ -172,7 +196,10 @@ function api(key: string) {
       );
       return handleResponse(res);
     },
-    async changeSubscription(email: string, plan: string, days?: number, projectId?: string, modules: string[] = ["blog", "localseo", "social"]) {
+    async changeSubscription(email: string, plan: string, days?: number, projectId?: string, modules: string[] = []) {
+      if (!modules.length) {
+        throw new Error("Pick at least one module to change.");
+      }
       const body: Record<string, unknown> = { email, plan, modules };
       if (days !== undefined) body.days = days;
       if (projectId) body.project_id = projectId;
@@ -283,7 +310,9 @@ const PROVIDER_COLORS: Record<string, { summary: string; row: string }> = {
 // --- Dashboard ---
 
 function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => void }) {
-  const client = api(adminKey);
+  // Memoize so child callbacks can include `client` in their deps cleanly
+  // and we stop relying on eslint-disable to suppress missing-dep warnings.
+  const client = useMemo(() => api(adminKey), [adminKey]);
 
   // User lookup state
   const [email, setEmail] = useState("");
@@ -329,8 +358,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     } finally {
       setLoadingAccounts(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminKey]);
+  }, [client]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 
@@ -347,8 +375,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     } finally {
       setUsageLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminKey, usageDays]);
+  }, [client, usageDays]);
 
   const handleLookup = async () => {
     if (!email.trim()) return;
