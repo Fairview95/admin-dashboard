@@ -302,6 +302,8 @@ function fmtShortDate(d: string) {
 const PROVIDER_COLORS: Record<string, { summary: string; row: string }> = {
   claude:  { summary: "bg-orange-100 text-orange-700 border-orange-200", row: "bg-orange-50 text-orange-600" },
   gemini:  { summary: "bg-blue-100 text-blue-700 border-blue-200",     row: "bg-blue-50 text-blue-600" },
+  // OpenAI (gpt-image-2, gpt-image-1.5) — social module's primary image provider post-migration.
+  openai:  { summary: "bg-emerald-100 text-emerald-700 border-emerald-200", row: "bg-emerald-50 text-emerald-600" },
   bfl:     { summary: "bg-purple-100 text-purple-700 border-purple-200", row: "bg-purple-50 text-purple-600" },
   fal:     { summary: "bg-green-100 text-green-700 border-green-200",   row: "bg-green-50 text-green-600" },
   recraft: { summary: "bg-pink-100 text-pink-700 border-pink-200",     row: "bg-pink-50 text-pink-600" },
