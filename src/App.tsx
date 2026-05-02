@@ -487,6 +487,28 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     );
   }, [usageData, usageSort]);
 
+  // Sum failed Gemini API attempts across all projects. Each `*_failed`
+  // operation row corresponds to one billed-but-unsuccessful Google API call.
+  const failureSummary = useMemo(() => {
+    if (!usageData) return { count: 0, cost: 0 };
+    let count = 0;
+    let cost = 0;
+    for (const proj of usageData.projects) {
+      for (const [op, data] of Object.entries(proj.by_operation)) {
+        if (op.endsWith("_failed")) {
+          count += data.count ?? 0;
+          cost += data.cost_usd;
+        }
+      }
+    }
+    return { count, cost };
+  }, [usageData]);
+
+  const projectFailedCount = (proj: UsageProject) =>
+    Object.entries(proj.by_operation)
+      .filter(([op]) => op.endsWith("_failed"))
+      .reduce((sum, [, data]) => sum + (data.count ?? 0), 0);
+
   const activeCount = accounts.filter((a) => !a.expired).length;
 
   return (
@@ -695,7 +717,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
           {usageData && (
             <div className="space-y-4">
               {/* Summary cards */}
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-5 gap-3">
                 <div className="border border-border rounded-lg p-3 bg-card">
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Cost</p>
                   <p className="text-xl font-semibold mt-1">${usageData.total_cost_usd.toFixed(2)}</p>
@@ -711,6 +733,13 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                 <div className="border border-border rounded-lg p-3 bg-card">
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">Images Generated</p>
                   <p className="text-xl font-semibold mt-1">{usageData.total_images.toLocaleString()}</p>
+                </div>
+                <div className={`border rounded-lg p-3 ${failureSummary.count > 0 ? "border-red-200 bg-red-50" : "border-border bg-card"}`}>
+                  <p className={`text-xs uppercase tracking-wider ${failureSummary.count > 0 ? "text-red-700" : "text-muted-foreground"}`}>Failed Calls</p>
+                  <p className={`text-xl font-semibold mt-1 ${failureSummary.count > 0 ? "text-red-700" : ""}`}>{failureSummary.count.toLocaleString()}</p>
+                  {failureSummary.count > 0 && (
+                    <p className="text-[11px] text-red-600 mt-0.5">${failureSummary.cost.toFixed(2)} billed by Google</p>
+                  )}
                 </div>
               </div>
 
@@ -800,6 +829,11 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                                   {prov}: ${data.cost_usd.toFixed(2)}{data.images > 0 ? ` · ${data.images}img` : ""}
                                 </span>
                               ))}
+                              {projectFailedCount(proj) > 0 && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200">
+                                  {projectFailedCount(proj)} failed
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-2.5 text-muted-foreground text-xs">{proj.email}</td>
