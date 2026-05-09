@@ -88,7 +88,13 @@ interface ChangePlanResponse {
   account_id: string;
   plan_code: string;
   activation_status: string;
+  // custom_blog_quota stays in the response shape for legacy compat but is
+  // always null after migration 049 — change_plan no longer touches it.
   custom_blog_quota: number | null;
+  // fresh_quota_for_month: temporary one-month grant set when
+  // give_fresh_quota=true. Auto-expires at fresh_quota_expires_at.
+  fresh_quota_for_month: number | null;
+  fresh_quota_expires_at: string | null;
   period_start: string | null;
   period_end: string | null;
   message: string;
