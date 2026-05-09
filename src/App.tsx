@@ -458,6 +458,19 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [applyConfirm, setApplyConfirm] = useState<{ projectId: string; module: string } | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState<{ projectId: string; module: string } | null>(null);
 
+  // Change-plan (advanced) dialog state — uses the new /api/v1/admin/change-plan
+  // endpoint with reset_period + give_fresh_quota flags. Distinct from the
+  // per-module Apply flow above because change-plan also triggers
+  // bonus-placeholder creation when the new plan has a higher quota.
+  const [changePlanOpen, setChangePlanOpen] = useState(false);
+  const [changePlanCode, setChangePlanCode] = useState("monthly_30");
+  const [changePlanResetPeriod, setChangePlanResetPeriod] = useState(true);
+  const [changePlanGiveFreshQuota, setChangePlanGiveFreshQuota] = useState(false);
+  const [changePlanReason, setChangePlanReason] = useState("");
+  const [changePlanLoading, setChangePlanLoading] = useState(false);
+  const [changePlanResult, setChangePlanResult] = useState<ChangePlanResponse | null>(null);
+  const [changePlanError, setChangePlanError] = useState<string | null>(null);
+
   // Default selection: prefer the new plan_code "monthly_30" (post-migration-048
   // canonical), fall back to legacy "pro30" if the dynamic plans list isn't
   // loaded yet — backend's _resolve_plan accepts both via LEGACY_PLAN_ALIAS.
@@ -642,6 +655,36 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     }
   };
 
+  // Change-plan (advanced) — calls the new endpoint with reset_period +
+  // give_fresh_quota flags. Server-side this also adds bonus placeholders
+  // when the new plan's monthly_blog_quota > old plan's quota, so the
+  // customer's calendar reflects the upgrade right away.
+  const handleChangePlanSubmit = async () => {
+    if (!email.trim() || !userData) return;
+    setChangePlanLoading(true);
+    setChangePlanError(null);
+    setChangePlanResult(null);
+    try {
+      const result = await client.changePlan(
+        email.trim(),
+        changePlanCode,
+        changePlanResetPeriod,
+        changePlanGiveFreshQuota,
+        changePlanReason.trim() || undefined,
+      );
+      setChangePlanResult(result);
+      setChangePlanReason("");
+      // Refresh the user-detail view so the new plan_code shows up
+      const data = await client.getUserSubscription(email.trim());
+      setUserData(data);
+      loadAccounts();
+    } catch (err) {
+      setChangePlanError(err instanceof Error ? err.message : "Failed to change plan");
+    } finally {
+      setChangePlanLoading(false);
+    }
+  };
+
   // Remove a single module activation from a project
   const handleRemoveModule = async (projectId: string, module: string) => {
     if (!email.trim()) return;
@@ -773,7 +816,22 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   <span className="text-sm font-semibold">{userData.email}</span>
                   <span className="text-xs text-muted-foreground ml-2 font-mono">{userData.account_id.slice(0, 8)}...</span>
                 </div>
-                <span className="text-xs text-muted-foreground">{userData.projects.length} project{userData.projects.length !== 1 ? "s" : ""}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">{userData.projects.length} project{userData.projects.length !== 1 ? "s" : ""}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setChangePlanResult(null);
+                      setChangePlanError(null);
+                      setChangePlanOpen(true);
+                    }}
+                    className="h-7 px-3 text-xs cursor-pointer"
+                    title="Change plan with reset_period + give_fresh_quota options. Adds bonus placeholders if upgrading."
+                  >
+                    Change Plan (Advanced)
+                  </Button>
+                </div>
               </div>
 
               {/* Projects with per-module rows */}
@@ -1399,6 +1457,141 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
           )}
         </section>
       </main>
+
+      {/* Change-plan (Advanced) dialog — uses /api/v1/admin/change-plan */}
+      <AlertDialog
+        open={changePlanOpen}
+        onOpenChange={(open) => {
+          if (!open && !changePlanLoading) {
+            setChangePlanOpen(false);
+          }
+        }}
+      >
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Change Plan (Advanced)</AlertDialogTitle>
+            <AlertDialogDescription>
+              Switch <span className="font-semibold text-foreground">{userData?.email}</span> to a new plan.
+              Reset_period restarts the billing cycle today; give_fresh_quota grants a one-month bonus
+              that auto-expires at end of month. If upgrading to a higher cap, bonus placeholder blogs
+              are added automatically across the rest of the month.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Plan</label>
+              <Select
+                value={changePlanCode}
+                onValueChange={setChangePlanCode}
+                disabled={changePlanLoading}
+              >
+                <SelectTrigger className="w-full mt-1 cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {plans.length > 0 ? (
+                    plans.map((p) => (
+                      <SelectItem key={p.code} value={p.code} className="cursor-pointer">
+                        {p.display_name} ({p.monthly_blog_quota ?? "—"} blogs/mo)
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <>
+                      <SelectItem value="trial_3day" className="cursor-pointer">Trial (3 days)</SelectItem>
+                      <SelectItem value="monthly_30" className="cursor-pointer">Standard 30 — Monthly</SelectItem>
+                      <SelectItem value="monthly_50" className="cursor-pointer">Growth 50 — Monthly</SelectItem>
+                      <SelectItem value="monthly_80" className="cursor-pointer">Premium 80 — Monthly</SelectItem>
+                      <SelectItem value="yearly_30" className="cursor-pointer">Standard 30 — Annual</SelectItem>
+                      <SelectItem value="yearly_50" className="cursor-pointer">Growth 50 — Annual</SelectItem>
+                      <SelectItem value="yearly_80" className="cursor-pointer">Premium 80 — Annual</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={changePlanResetPeriod}
+                onChange={(e) => setChangePlanResetPeriod(e.target.checked)}
+                disabled={changePlanLoading}
+                className="cursor-pointer"
+              />
+              <span>Reset billing period to today</span>
+              <span className="text-xs text-muted-foreground">(default for upgrades)</span>
+            </label>
+
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={changePlanGiveFreshQuota}
+                onChange={(e) => setChangePlanGiveFreshQuota(e.target.checked)}
+                disabled={changePlanLoading}
+                className="cursor-pointer"
+              />
+              <span>Give fresh quota for this month</span>
+              <span className="text-xs text-muted-foreground">(auto-expires end of month)</span>
+            </label>
+
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Reason (optional)</label>
+              <Input
+                value={changePlanReason}
+                onChange={(e) => setChangePlanReason(e.target.value)}
+                placeholder="e.g. customer requested upgrade"
+                disabled={changePlanLoading}
+                className="mt-1"
+              />
+            </div>
+
+            {changePlanError && (
+              <div className="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+                {changePlanError}
+              </div>
+            )}
+
+            {changePlanResult && (
+              <div className="rounded border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-950/20 p-2 text-xs space-y-1">
+                <div className="font-medium text-emerald-700 dark:text-emerald-400">{changePlanResult.message}</div>
+                {changePlanResult.bonus_placeholders_added > 0 && (
+                  <div>+ {changePlanResult.bonus_placeholders_added} bonus blog placeholder{changePlanResult.bonus_placeholders_added !== 1 ? "s" : ""} scheduled this month</div>
+                )}
+                {changePlanResult.fresh_quota_for_month && (
+                  <div>
+                    Fresh quota: <span className="font-mono">{changePlanResult.fresh_quota_for_month}</span> blogs
+                    {changePlanResult.fresh_quota_expires_at && (
+                      <> — expires {fmtShortDate(changePlanResult.fresh_quota_expires_at)}</>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              className="cursor-pointer"
+              disabled={changePlanLoading}
+            >
+              {changePlanResult ? "Close" : "Cancel"}
+            </AlertDialogCancel>
+            {!changePlanResult && (
+              <AlertDialogAction
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleChangePlanSubmit();
+                }}
+                disabled={changePlanLoading}
+                className="cursor-pointer"
+              >
+                {changePlanLoading ? <Spinner /> : "Apply Plan Change"}
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Apply confirm dialog */}
       <AlertDialog open={!!applyConfirm} onOpenChange={(open) => !open && setApplyConfirm(null)}>
