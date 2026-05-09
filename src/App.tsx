@@ -58,6 +58,17 @@ interface DemoAccount {
   expired: boolean;
 }
 
+interface BlogQuotaData {
+  email: string;
+  account_id: string;
+  custom_blog_quota: number | null;   // null = no override (using tier default)
+  tier_status: string | null;          // 'trial' | 'pro30' | 'active' | etc.
+  subscription_status: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  used_this_period: number;
+}
+
 interface UserSubscriptionData {
   email: string;
   user_id: string;
@@ -226,6 +237,25 @@ function api(key: string) {
       const res = await fetch(`${API_URL}/api/v1/admin/usage?${searchParams}`, { headers });
       return handleResponse(res);
     },
+    async getBlogQuota(email: string): Promise<BlogQuotaData> {
+      const res = await fetch(
+        `${API_URL}/api/v1/admin/get-blog-quota?email=${encodeURIComponent(email)}`,
+        { headers }
+      );
+      return handleResponse(res);
+    },
+    async setBlogQuota(email: string, customBlogQuota: number | null, reason?: string) {
+      const res = await fetch(`${API_URL}/api/v1/admin/set-blog-quota`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          email,
+          custom_blog_quota: customBlogQuota,
+          reason: reason || null,
+        }),
+      });
+      return handleResponse(res);
+    },
   };
 }
 
@@ -322,6 +352,17 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupMsg, setLookupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Blog quota state — separate from generic user lookup so the admin can
+  // adjust quota for one user while keeping a different user open in the
+  // main subscription panel.
+  const [quotaEmail, setQuotaEmail] = useState("");
+  const [quotaData, setQuotaData] = useState<BlogQuotaData | null>(null);
+  const [quotaCustomValue, setQuotaCustomValue] = useState("");
+  const [quotaReason, setQuotaReason] = useState("");
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaSaving, setQuotaSaving] = useState(false);
+  const [quotaMsg, setQuotaMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   // Plan action state — per-module plan/days keyed by "projectId:module"
   const [modulePlans, setModulePlans] = useState<Record<string, string>>({});
   const [moduleDays, setModuleDays] = useState<Record<string, string>>({});
@@ -394,6 +435,80 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     } finally {
       setLookupLoading(false);
     }
+  };
+
+  // ---- Blog quota handlers ---------------------------------------------
+  const handleQuotaLookup = async () => {
+    if (!quotaEmail.trim()) return;
+    setQuotaLoading(true);
+    setQuotaMsg(null);
+    setQuotaData(null);
+    setQuotaCustomValue("");
+    try {
+      const data = await client.getBlogQuota(quotaEmail.trim());
+      setQuotaData(data);
+      setQuotaCustomValue(
+        data.custom_blog_quota !== null ? String(data.custom_blog_quota) : ""
+      );
+    } catch (err) {
+      setQuotaMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "User not found",
+      });
+    } finally {
+      setQuotaLoading(false);
+    }
+  };
+
+  const handleQuotaSet = async (value: number | null) => {
+    if (!quotaEmail.trim()) return;
+    setQuotaSaving(true);
+    setQuotaMsg(null);
+    try {
+      const result = await client.setBlogQuota(
+        quotaEmail.trim(),
+        value,
+        quotaReason.trim() || undefined
+      );
+      setQuotaMsg({ type: "success", text: result.message });
+      setQuotaReason("");
+      // Refresh the displayed state with the new value
+      const fresh = await client.getBlogQuota(quotaEmail.trim());
+      setQuotaData(fresh);
+      setQuotaCustomValue(
+        fresh.custom_blog_quota !== null ? String(fresh.custom_blog_quota) : ""
+      );
+    } catch (err) {
+      setQuotaMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to update quota",
+      });
+    } finally {
+      setQuotaSaving(false);
+    }
+  };
+
+  const handleQuotaCustomSubmit = async () => {
+    const trimmed = quotaCustomValue.trim();
+    if (!trimmed) return;
+    const n = parseInt(trimmed, 10);
+    if (isNaN(n) || n < 0 || !Number.isFinite(n)) {
+      setQuotaMsg({
+        type: "error",
+        text: "Custom quota must be a non-negative integer.",
+      });
+      return;
+    }
+    if (n > 10000) {
+      // 10k is plenty of room above the largest legitimate enterprise plan;
+      // anything larger is almost certainly a typo (300 → 3000 → 30000).
+      setQuotaMsg({
+        type: "error",
+        text: `Custom quota of ${n} looks unusually high. Use 999 for "unlimited" instead, or contact engineering if you genuinely need >10,000.`,
+      });
+      return;
+    }
+    await handleQuotaSet(n);
   };
 
   // Apply plan to a single module of a project
@@ -680,6 +795,218 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   </div>
                 );
               })}
+            </div>
+          )}
+        </section>
+
+        {/* ============ CUSTOM BLOG QUOTA ============ */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Custom Blog Quota
+          </h2>
+          <p className="text-sm text-muted-foreground mb-3">
+            Set a per-account override for the blog generation quota. Wins over the
+            tier default. Use <span className="font-mono">999</span> for effectively
+            unlimited; clear to fall back to the tier default. Effective immediately
+            on the user's next blog generation request.
+          </p>
+
+          <div className="flex gap-2 mb-3 items-end">
+            <Input
+              type="email"
+              placeholder="user@example.com"
+              value={quotaEmail}
+              onChange={(e) => setQuotaEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleQuotaLookup()}
+              className="max-w-[280px] h-9"
+            />
+            <Button
+              onClick={handleQuotaLookup}
+              disabled={quotaLoading || !quotaEmail.trim()}
+              className="h-9 px-4 cursor-pointer"
+            >
+              {quotaLoading ? <Spinner /> : "Look up"}
+            </Button>
+          </div>
+
+          {quotaMsg && (
+            <p
+              className={`text-sm mb-3 ${
+                quotaMsg.type === "success" ? "text-green-700" : "text-destructive"
+              }`}
+            >
+              {quotaMsg.text}
+            </p>
+          )}
+
+          {quotaData && (
+            <div className="border border-border rounded-lg p-4 bg-card space-y-4 max-w-2xl">
+              {/* Current state */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Tier status
+                  </p>
+                  <p className="font-medium mt-0.5">
+                    {quotaData.tier_status ?? "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Subscription status
+                  </p>
+                  <p className="font-medium mt-0.5">
+                    {quotaData.subscription_status ?? "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Custom override
+                  </p>
+                  <p className="font-medium mt-0.5">
+                    {quotaData.custom_blog_quota === null ? (
+                      <span className="text-muted-foreground italic">
+                        not set (using tier default)
+                      </span>
+                    ) : quotaData.custom_blog_quota >= 999 ? (
+                      <Badge variant="secondary">Unlimited (999)</Badge>
+                    ) : (
+                      <span>
+                        <span className="font-mono">
+                          {quotaData.custom_blog_quota}
+                        </span>{" "}
+                        blogs / period
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Used this period
+                  </p>
+                  <p className="font-medium mt-0.5 font-mono">
+                    {quotaData.used_this_period}
+                  </p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Period
+                  </p>
+                  <p className="font-medium mt-0.5 text-xs">
+                    {quotaData.period_start ? fmtDate(quotaData.period_start) : "—"}
+                    {" → "}
+                    {quotaData.period_end ? fmtDate(quotaData.period_end) : "—"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick set buttons */}
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Quick set
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(null)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    Use plan default
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(3)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    3 (Trial)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(30)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    30 (Standard)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(50)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    50 (Growth)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(80)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    80 (Scale)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(999)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    Unlimited (999)
+                  </Button>
+                </div>
+              </div>
+
+              {/* Custom value input */}
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Or set custom value
+                </p>
+                <div className="flex gap-2 items-center">
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder="e.g. 75"
+                    value={quotaCustomValue}
+                    onChange={(e) => setQuotaCustomValue(e.target.value)}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" && handleQuotaCustomSubmit()
+                    }
+                    className="w-32 h-9"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    blogs / billing period
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={handleQuotaCustomSubmit}
+                    disabled={quotaSaving || !quotaCustomValue.trim()}
+                    className="ml-2 cursor-pointer"
+                  >
+                    {quotaSaving ? <Spinner /> : "Apply"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Optional reason */}
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Reason (optional, logged to server)
+                </p>
+                <Input
+                  type="text"
+                  placeholder="e.g. customer comp for bug, enterprise deal #4521"
+                  value={quotaReason}
+                  onChange={(e) => setQuotaReason(e.target.value)}
+                  className="h-9"
+                />
+              </div>
             </div>
           )}
         </section>
