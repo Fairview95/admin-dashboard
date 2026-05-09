@@ -95,6 +95,13 @@ interface ChangePlanResponse {
   // give_fresh_quota=true. Auto-expires at fresh_quota_expires_at.
   fresh_quota_for_month: number | null;
   fresh_quota_expires_at: string | null;
+  // Number of bonus placeholder blogs added across the rest of the month
+  // because the new plan has higher monthly capacity than the old one.
+  bonus_placeholders_added: number;
+  // When bonus_placeholders_added=0, this explains why so admin doesn't
+  // think the upgrade silently failed. See backend ChangePlanResponse
+  // for the full enum of values.
+  bonus_skipped_reason: string | null;
   period_start: string | null;
   period_end: string | null;
   message: string;
@@ -1557,6 +1564,33 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                 <div className="font-medium text-emerald-700 dark:text-emerald-400">{changePlanResult.message}</div>
                 {changePlanResult.bonus_placeholders_added > 0 && (
                   <div>+ {changePlanResult.bonus_placeholders_added} bonus blog placeholder{changePlanResult.bonus_placeholders_added !== 1 ? "s" : ""} scheduled this month</div>
+                )}
+                {changePlanResult.bonus_placeholders_added === 0 && changePlanResult.bonus_skipped_reason && (
+                  <div className="text-muted-foreground">
+                    No bonus placeholders added.{" "}
+                    {(() => {
+                      switch (changePlanResult.bonus_skipped_reason) {
+                        case "new_plan_unlimited":
+                          return "(New plan is unlimited.)"
+                        case "no_old_plan_baseline":
+                          return "(No prior plan_code — initial content plan will use the new quota.)"
+                        case "lateral_or_downgrade":
+                          return "(Same or lower monthly cap — no fill needed.)"
+                        case "already_at_or_above_new_cap":
+                          return "(Customer already has enough scheduled.)"
+                        case "no_active_plan":
+                          return "(No active content plan — customer needs to generate one first.)"
+                        case "no_days_remaining":
+                          return "(Last day of month — wait until tomorrow.)"
+                        case "no_projects":
+                          return "(Account has no projects yet.)"
+                        case "insert_failed":
+                          return "(Database error — please retry.)"
+                        default:
+                          return `(${changePlanResult.bonus_skipped_reason})`
+                      }
+                    })()}
+                  </div>
                 )}
                 {changePlanResult.fresh_quota_for_month && (
                   <div>
