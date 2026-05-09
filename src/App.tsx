@@ -69,6 +69,31 @@ interface BlogQuotaData {
   used_this_period: number;
 }
 
+// Subscription plan as defined in core.subscription_plans (migration 048).
+// Fetched dynamically via GET /api/v1/admin/plans so the dashboard reflects
+// the DB without needing a frontend deploy when admin adds new tiers.
+interface Plan {
+  code: string;
+  display_name: string;
+  module_code: string;
+  monthly_blog_quota: number | null;
+  duration_days: number;
+  price_usd: number | null;
+  is_active: boolean;
+}
+
+interface ChangePlanResponse {
+  success: boolean;
+  email: string;
+  account_id: string;
+  plan_code: string;
+  activation_status: string;
+  custom_blog_quota: number | null;
+  period_start: string | null;
+  period_end: string | null;
+  message: string;
+}
+
 interface UserSubscriptionData {
   email: string;
   user_id: string;
@@ -117,10 +142,25 @@ interface UsageData {
 
 // --- Constants ---
 
+// PLAN_LABELS is now mostly historical — actual plan names come from the
+// backend (GET /api/v1/admin/plans, sourced from core.subscription_plans
+// added in migration 048). Kept here only for backwards-compat display
+// when an old subscription row still references a legacy status string
+// (trial / pro30 / active) and the new plan_code-based mapping isn't
+// available yet.
 const PLAN_LABELS: Record<string, string> = {
   trial: "Trial",
   pro30: "Pro 30",
   active: "Active",
+  // New plan codes (mirrored here so legacy lookups don't return undefined
+  // when the dashboard renders them before the dynamic plans list loads).
+  trial_3day: "Trial (3 days)",
+  monthly_30: "Standard 30 — Monthly",
+  monthly_50: "Growth 50 — Monthly",
+  monthly_80: "Premium 80 — Monthly",
+  yearly_30: "Standard 30 — Annual",
+  yearly_50: "Growth 50 — Annual",
+  yearly_80: "Premium 80 — Annual",
 };
 
 const MODULE_LABELS: Record<string, string> = {
@@ -130,11 +170,21 @@ const MODULE_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
+  // Legacy status values
   trial: "bg-amber-100 text-amber-700",
   pro30: "bg-blue-100 text-blue-700",
   active: "bg-emerald-100 text-emerald-700",
   trialing: "bg-amber-100 text-amber-700",
   expired: "bg-red-100 text-red-600",
+  // New plan codes from migration 048 — colored by tier capacity:
+  // trial = amber (low), monthly_* = blue (mid), yearly_* = emerald (high commitment).
+  trial_3day:  "bg-amber-100 text-amber-700",
+  monthly_30:  "bg-blue-100 text-blue-700",
+  monthly_50:  "bg-blue-100 text-blue-700",
+  monthly_80:  "bg-blue-100 text-blue-700",
+  yearly_30:   "bg-emerald-100 text-emerald-700",
+  yearly_50:   "bg-emerald-100 text-emerald-700",
+  yearly_80:   "bg-emerald-100 text-emerald-700",
 };
 
 // --- Spinner ---
@@ -256,6 +306,33 @@ function api(key: string) {
       });
       return handleResponse(res);
     },
+    async listPlans(moduleCode: string = "blog"): Promise<{ plans: Plan[] }> {
+      const res = await fetch(
+        `${API_URL}/api/v1/admin/plans?module_code=${encodeURIComponent(moduleCode)}`,
+        { headers }
+      );
+      return handleResponse(res);
+    },
+    async changePlan(
+      email: string,
+      planCode: string,
+      resetPeriod: boolean,
+      giveFreshQuota: boolean,
+      reason?: string,
+    ): Promise<ChangePlanResponse> {
+      const res = await fetch(`${API_URL}/api/v1/admin/change-plan`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          email,
+          plan_code: planCode,
+          reset_period: resetPeriod,
+          give_fresh_quota: giveFreshQuota,
+          reason: reason || null,
+        }),
+      });
+      return handleResponse(res);
+    },
   };
 }
 
@@ -352,6 +429,11 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupMsg, setLookupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Subscription plans loaded from the backend (post-migration-048 source
+  // of truth in core.subscription_plans). Populates plan dropdowns
+  // dynamically so admin can add new tiers without a frontend deploy.
+  const [plans, setPlans] = useState<Plan[]>([]);
+
   // Blog quota state — separate from generic user lookup so the admin can
   // adjust quota for one user while keeping a different user open in the
   // main subscription panel.
@@ -370,7 +452,11 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [applyConfirm, setApplyConfirm] = useState<{ projectId: string; module: string } | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState<{ projectId: string; module: string } | null>(null);
 
-  const getPlan = (key: string) => modulePlans[key] || "pro30";
+  // Default selection: prefer the new plan_code "monthly_30" (post-migration-048
+  // canonical), fall back to legacy "pro30" if the dynamic plans list isn't
+  // loaded yet — backend's _resolve_plan accepts both via LEGACY_PLAN_ALIAS.
+  const getPlan = (key: string) =>
+    modulePlans[key] || (plans.length > 0 ? "monthly_30" : "pro30");
   const getDays = (key: string) => moduleDays[key] || "";
   const setPlan = (key: string, val: string) => setModulePlans((prev) => ({ ...prev, [key]: val }));
   const setDays = (key: string, val: string) => setModuleDays((prev) => ({ ...prev, [key]: val }));
@@ -404,6 +490,17 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   }, [client]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+
+  // Load plan list once on dashboard mount. Failing silently is acceptable —
+  // the dropdown falls back to legacy hardcoded options if `plans` is empty
+  // (older backends without /admin/plans return 404).
+  useEffect(() => {
+    let cancelled = false;
+    client.listPlans("blog")
+      .then((d) => { if (!cancelled) setPlans(d.plans || []); })
+      .catch((err) => console.warn("[admin] failed to load plans:", err));
+    return () => { cancelled = true; };
+  }, [client]);
 
   const loadUsage = useCallback(async (filterEmail?: string) => {
     setUsageLoading(true);
@@ -739,19 +836,46 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               </td>
                               <td className="px-4 py-2">
                                 <Select value={getPlan(key)} onValueChange={(v) => setPlan(key, v)}>
-                                  <SelectTrigger className="w-[130px] h-7 text-xs cursor-pointer">
+                                  <SelectTrigger className="w-[180px] h-7 text-xs cursor-pointer">
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="trial" className="cursor-pointer">
-                                      <div>Trial <span className="text-muted-foreground">(3d, 3 blogs)</span></div>
-                                    </SelectItem>
-                                    <SelectItem value="pro30" className="cursor-pointer">
-                                      <div>Pro 30 <span className="text-muted-foreground">(30d, 30 blogs)</span></div>
-                                    </SelectItem>
-                                    <SelectItem value="active" className="cursor-pointer">
-                                      <div>Active <span className="text-muted-foreground">(365d, unlimited)</span></div>
-                                    </SelectItem>
+                                    {/* Plans pulled dynamically from core.subscription_plans
+                                        (post-migration-048). Falls back to legacy hardcoded
+                                        options if `plans` hasn't loaded yet (e.g. backend
+                                        without /admin/plans endpoint). */}
+                                    {plans.length > 0 ? (
+                                      plans.map((p) => (
+                                        <SelectItem
+                                          key={p.code}
+                                          value={p.code}
+                                          className="cursor-pointer"
+                                        >
+                                          <div>
+                                            {p.display_name}{" "}
+                                            <span className="text-muted-foreground">
+                                              ({p.duration_days}d
+                                              {p.monthly_blog_quota !== null
+                                                ? `, ${p.monthly_blog_quota} blogs/mo`
+                                                : ", unlimited"}
+                                              )
+                                            </span>
+                                          </div>
+                                        </SelectItem>
+                                      ))
+                                    ) : (
+                                      <>
+                                        <SelectItem value="trial" className="cursor-pointer">
+                                          <div>Trial <span className="text-muted-foreground">(3d, 3 blogs)</span></div>
+                                        </SelectItem>
+                                        <SelectItem value="pro30" className="cursor-pointer">
+                                          <div>Pro 30 <span className="text-muted-foreground">(30d, 30 blogs)</span></div>
+                                        </SelectItem>
+                                        <SelectItem value="active" className="cursor-pointer">
+                                          <div>Active <span className="text-muted-foreground">(365d, unlimited)</span></div>
+                                        </SelectItem>
+                                      </>
+                                    )}
                                   </SelectContent>
                                 </Select>
                               </td>
