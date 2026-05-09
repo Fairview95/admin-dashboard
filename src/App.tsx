@@ -1562,36 +1562,10 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
             {changePlanResult && (
               <div className="rounded border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-950/20 p-2 text-xs space-y-1">
                 <div className="font-medium text-emerald-700 dark:text-emerald-400">{changePlanResult.message}</div>
-                {changePlanResult.bonus_placeholders_added > 0 && (
-                  <div>+ {changePlanResult.bonus_placeholders_added} bonus blog placeholder{changePlanResult.bonus_placeholders_added !== 1 ? "s" : ""} scheduled this month</div>
-                )}
-                {changePlanResult.bonus_placeholders_added === 0 && changePlanResult.bonus_skipped_reason && (
-                  <div className="text-muted-foreground">
-                    No bonus placeholders added.{" "}
-                    {(() => {
-                      switch (changePlanResult.bonus_skipped_reason) {
-                        case "new_plan_unlimited":
-                          return "(New plan is unlimited.)"
-                        case "no_old_plan_baseline":
-                          return "(No prior plan_code — initial content plan will use the new quota.)"
-                        case "lateral_or_downgrade":
-                          return "(Same or lower monthly cap — no fill needed.)"
-                        case "already_at_or_above_new_cap":
-                          return "(Customer already has enough scheduled.)"
-                        case "no_active_plan":
-                          return "(No active content plan — customer needs to generate one first.)"
-                        case "no_days_remaining":
-                          return "(Last day of month — wait until tomorrow.)"
-                        case "no_projects":
-                          return "(Account has no projects yet.)"
-                        case "insert_failed":
-                          return "(Database error — please retry.)"
-                        default:
-                          return `(${changePlanResult.bonus_skipped_reason})`
-                      }
-                    })()}
-                  </div>
-                )}
+                <div className="text-muted-foreground">
+                  Plan code updated. Customer fills new capacity themselves
+                  via "Generate more" (one batch Claude call per request).
+                </div>
                 {changePlanResult.fresh_quota_for_month && (
                   <div>
                     Fresh quota: <span className="font-mono">{changePlanResult.fresh_quota_for_month}</span> blogs
