@@ -88,22 +88,15 @@ interface ChangePlanResponse {
   account_id: string;
   plan_code: string;
   activation_status: string;
-  // custom_blog_quota stays in the response shape for legacy compat but is
-  // always null after migration 049 — change_plan no longer touches it.
-  custom_blog_quota: number | null;
-  // fresh_quota_for_month: temporary one-month grant set when
-  // give_fresh_quota=true. Auto-expires at fresh_quota_expires_at.
-  fresh_quota_for_month: number | null;
-  fresh_quota_expires_at: string | null;
-  // Number of bonus placeholder blogs added across the rest of the month
-  // because the new plan has higher monthly capacity than the old one.
-  bonus_placeholders_added: number;
-  // When bonus_placeholders_added=0, this explains why so admin doesn't
-  // think the upgrade silently failed. See backend ChangePlanResponse
-  // for the full enum of values.
-  bonus_skipped_reason: string | null;
   period_start: string | null;
   period_end: string | null;
+  // List of every project_id whose module_activation row was updated by
+  // this call. Lets admin see the blast radius — when project_id is
+  // OMITTED from the request, change-plan touches all of the account's
+  // blog projects (could be 1–N rows). Surfacing this in the UI prevents
+  // an admin from accidentally downgrading every project on a multi-
+  // project account.
+  affected_project_ids: (string | null)[];
   message: string;
 }
 
@@ -330,19 +323,38 @@ function api(key: string) {
       email: string,
       planCode: string,
       resetPeriod: boolean,
-      giveFreshQuota: boolean,
       reason?: string,
+      projectId?: string,
     ): Promise<ChangePlanResponse> {
+      // Backend requires reset_period=True when the new plan's
+      // duration_days differs from the existing subscription window
+      // (e.g., monthly→yearly). Without it the customer ends up with
+      // 12× quota over a stale 30-day cycle. The 400 from the backend
+      // surfaces this in the dialog's error panel — admin can re-submit
+      // with reset_period=True if that's what they want.
+      //
+      // project_id is OPTIONAL. Omitted = apply to every project the
+      // account has on the blog module (legacy default). Provided =
+      // scope to that single project, useful when one project of a
+      // multi-project account needs an independent plan.
+      //
+      // give_fresh_quota was removed when the model switched from
+      // calendar-month to subscription-period — there's no monthly cap
+      // to "refresh" anymore; reset_period=True alone bumps activated_at
+      // and gives the customer a clean window with zero blogs counted.
+      const body: Record<string, unknown> = {
+        email,
+        plan_code: planCode,
+        reset_period: resetPeriod,
+        reason: reason || null,
+      };
+      if (projectId) {
+        body.project_id = projectId;
+      }
       const res = await fetch(`${API_URL}/api/v1/admin/change-plan`, {
         method: "PUT",
         headers,
-        body: JSON.stringify({
-          email,
-          plan_code: planCode,
-          reset_period: resetPeriod,
-          give_fresh_quota: giveFreshQuota,
-          reason: reason || null,
-        }),
+        body: JSON.stringify(body),
       });
       return handleResponse(res);
     },
@@ -466,14 +478,16 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [removeConfirm, setRemoveConfirm] = useState<{ projectId: string; module: string } | null>(null);
 
   // Change-plan (advanced) dialog state — uses the new /api/v1/admin/change-plan
-  // endpoint with reset_period + give_fresh_quota flags. Distinct from the
-  // per-module Apply flow above because change-plan also triggers
-  // bonus-placeholder creation when the new plan has a higher quota.
+  // endpoint. Period-based model: reset_period bumps activated_at + the
+  // subscription window so the new plan starts with a clean quota counter.
+  // give_fresh_quota was removed — there's no monthly cap to refresh.
+  // project_id is optional: blank = apply to every project the account has
+  // on the blog module; populated = scope to that single project.
   const [changePlanOpen, setChangePlanOpen] = useState(false);
   const [changePlanCode, setChangePlanCode] = useState("monthly_30");
   const [changePlanResetPeriod, setChangePlanResetPeriod] = useState(true);
-  const [changePlanGiveFreshQuota, setChangePlanGiveFreshQuota] = useState(false);
   const [changePlanReason, setChangePlanReason] = useState("");
+  const [changePlanProjectId, setChangePlanProjectId] = useState("");
   const [changePlanLoading, setChangePlanLoading] = useState(false);
   const [changePlanResult, setChangePlanResult] = useState<ChangePlanResponse | null>(null);
   const [changePlanError, setChangePlanError] = useState<string | null>(null);
@@ -663,9 +677,17 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   };
 
   // Change-plan (advanced) — calls the new endpoint with reset_period +
-  // give_fresh_quota flags. Server-side this also adds bonus placeholders
-  // when the new plan's monthly_blog_quota > old plan's quota, so the
-  // customer's calendar reflects the upgrade right away.
+  // Period-based model: reset_period=True bumps activated_at + the
+  // subscription period_start/period_end so the new plan starts with a
+  // clean quota counter. The backend refuses reset_period=False when
+  // the new plan's duration_days differs from the existing window
+  // (e.g., monthly→yearly) — that 400 surfaces as changePlanError so
+  // the admin can re-submit with reset_period=True.
+  //
+  // project_id is optional. Blank = apply to all of the account's blog
+  // projects (legacy default). Populated = scope to a single project,
+  // useful when one project of a multi-project account needs an
+  // independent plan.
   const handleChangePlanSubmit = async () => {
     if (!email.trim() || !userData) return;
     setChangePlanLoading(true);
@@ -676,11 +698,12 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
         email.trim(),
         changePlanCode,
         changePlanResetPeriod,
-        changePlanGiveFreshQuota,
         changePlanReason.trim() || undefined,
+        changePlanProjectId.trim() || undefined,
       );
       setChangePlanResult(result);
       setChangePlanReason("");
+      setChangePlanProjectId("");
       // Refresh the user-detail view so the new plan_code shows up
       const data = await client.getUserSubscription(email.trim());
       setUserData(data);
@@ -834,7 +857,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                       setChangePlanOpen(true);
                     }}
                     className="h-7 px-3 text-xs cursor-pointer"
-                    title="Change plan with reset_period + give_fresh_quota options. Adds bonus placeholders if upgrading."
+                    title="Change plan with reset_period + optional project_id scoping. Backend refuses duration-mismatched no-reset switches."
                   >
                     Change Plan (Advanced)
                   </Button>
@@ -1479,9 +1502,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
             <AlertDialogTitle>Change Plan (Advanced)</AlertDialogTitle>
             <AlertDialogDescription>
               Switch <span className="font-semibold text-foreground">{userData?.email}</span> to a new plan.
-              Reset_period restarts the billing cycle today; give_fresh_quota grants a one-month bonus
-              that auto-expires at end of month. If upgrading to a higher cap, bonus placeholder blogs
-              are added automatically across the rest of the month.
+              Reset_period restarts the subscription window today (clean quota counter).
+              Leave Project ID empty to apply to all of the account's blog projects, or
+              paste a UUID to scope to one project.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -1526,21 +1549,25 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                 disabled={changePlanLoading}
                 className="cursor-pointer"
               />
-              <span>Reset billing period to today</span>
-              <span className="text-xs text-muted-foreground">(default for upgrades)</span>
+              <span>Reset subscription period to today</span>
+              <span className="text-xs text-muted-foreground">(default; required when duration changes)</span>
             </label>
 
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={changePlanGiveFreshQuota}
-                onChange={(e) => setChangePlanGiveFreshQuota(e.target.checked)}
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Project ID (optional)
+              </label>
+              <Input
+                value={changePlanProjectId}
+                onChange={(e) => setChangePlanProjectId(e.target.value)}
+                placeholder="leave blank to apply to all account projects"
                 disabled={changePlanLoading}
-                className="cursor-pointer"
+                className="mt-1 font-mono text-xs"
               />
-              <span>Give fresh quota for this month</span>
-              <span className="text-xs text-muted-foreground">(auto-expires end of month)</span>
-            </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Multi-project accounts: paste a project UUID to change just that one.
+              </p>
+            </div>
 
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Reason (optional)</label>
@@ -1566,12 +1593,25 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   Plan code updated. Customer fills new capacity themselves
                   via "Generate more" (one batch Claude call per request).
                 </div>
-                {changePlanResult.fresh_quota_for_month && (
+                {changePlanResult.affected_project_ids && changePlanResult.affected_project_ids.length > 0 && (
                   <div>
-                    Fresh quota: <span className="font-mono">{changePlanResult.fresh_quota_for_month}</span> blogs
-                    {changePlanResult.fresh_quota_expires_at && (
-                      <> — expires {fmtShortDate(changePlanResult.fresh_quota_expires_at)}</>
-                    )}
+                    <div className="text-muted-foreground">
+                      Affected project{changePlanResult.affected_project_ids.length === 1 ? "" : "s"}
+                      {" "}({changePlanResult.affected_project_ids.length}):
+                    </div>
+                    <ul className="mt-1 space-y-0.5">
+                      {changePlanResult.affected_project_ids.map((pid, i) => (
+                        <li key={i} className="font-mono text-[11px] truncate">
+                          {pid ?? "(account-level row, no project_id)"}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {changePlanResult.period_start && changePlanResult.period_end && (
+                  <div className="text-muted-foreground">
+                    New period: {fmtShortDate(changePlanResult.period_start)} →{" "}
+                    {fmtShortDate(changePlanResult.period_end)}
                   </div>
                 )}
               </div>
