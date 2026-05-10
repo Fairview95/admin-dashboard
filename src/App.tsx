@@ -801,6 +801,30 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       .reduce((sum, [, data]) => sum + (data.count ?? 0), 0);
 
   const activeCount = accounts.filter((a) => !a.expired).length;
+  const expiredCount = accounts.length - activeCount;
+
+  // "Expiring soon" = accounts with trial_ends_at in the next 3 days.
+  // Helps admin reach out before the customer churns. Skips already-
+  // expired rows (those need a different action: revoke or upgrade).
+  const now = Date.now();
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const expiringSoonCount = accounts.filter((a) => {
+    if (a.expired) return false;
+    if (!a.trial_ends_at) return false;
+    const ts = new Date(a.trial_ends_at).getTime();
+    if (isNaN(ts)) return false;
+    return ts - now <= THREE_DAYS_MS && ts >= now;
+  }).length;
+
+  // Recent signups = granted in the last 7 days. Pulled from the same
+  // /demo-accounts response — no new endpoint call.
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const recentSignupsCount = accounts.filter((a) => {
+    if (!a.granted_at) return false;
+    const ts = new Date(a.granted_at).getTime();
+    if (isNaN(ts)) return false;
+    return now - ts <= SEVEN_DAYS_MS;
+  }).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -815,6 +839,89 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-8">
+
+        {/* ============ DASHBOARD OVERVIEW ============ */}
+        {/* At-a-glance snapshot derived from the existing /demo-accounts
+            response (already loaded for the Demo Accounts table below).
+            Zero extra API calls. Shows what an admin most often needs to
+            answer when they log in: who's about to churn, who just
+            signed up, where do I focus today. */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Overview
+          </h2>
+          {loadingAccounts ? (
+            <div className="grid grid-cols-4 gap-3">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="border border-border rounded-lg p-3 bg-card">
+                  <div className="h-3 w-20 bg-muted rounded animate-pulse" />
+                  <div className="h-7 w-12 bg-muted rounded animate-pulse mt-2" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-4 gap-3">
+              <div className="border border-border rounded-lg p-3 bg-card">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Active customers
+                </p>
+                <p className="text-2xl font-semibold mt-1">{activeCount}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  of {accounts.length} total demo records
+                </p>
+              </div>
+              <div
+                className={`border rounded-lg p-3 ${
+                  expiringSoonCount > 0
+                    ? "border-amber-300 bg-amber-50"
+                    : "border-border bg-card"
+                }`}
+              >
+                <p
+                  className={`text-xs uppercase tracking-wider ${
+                    expiringSoonCount > 0
+                      ? "text-amber-800"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  Expiring in 3 days
+                </p>
+                <p
+                  className={`text-2xl font-semibold mt-1 ${
+                    expiringSoonCount > 0 ? "text-amber-800" : ""
+                  }`}
+                >
+                  {expiringSoonCount}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {expiringSoonCount > 0
+                    ? "consider proactive outreach"
+                    : "no immediate action"}
+                </p>
+              </div>
+              <div className="border border-border rounded-lg p-3 bg-card">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Signups (7d)
+                </p>
+                <p className="text-2xl font-semibold mt-1">{recentSignupsCount}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  granted in the past week
+                </p>
+              </div>
+              <div className="border border-border rounded-lg p-3 bg-card">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Expired records
+                </p>
+                <p className="text-2xl font-semibold mt-1 text-muted-foreground">
+                  {expiredCount}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  inactive — revoke or upgrade
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
 
         {/* ============ USER LOOKUP + ACTIONS ============ */}
         <section>
@@ -1024,9 +1131,10 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
           </h2>
           <p className="text-sm text-muted-foreground mb-3">
             Set a per-account override for the blog generation quota. Wins over the
-            tier default. Use <span className="font-mono">999</span> for effectively
-            unlimited; clear to fall back to the tier default. Effective immediately
-            on the user's next blog generation request.
+            plan default. <span className="font-medium">There is no "unlimited" sentinel</span> —
+            any number you set becomes a hard cap (the customer gets blocked on their
+            Nth blog). Clear the override to fall back to the plan tier default.
+            Effective immediately on the user's next blog generation request.
           </p>
 
           <div className="flex gap-2 mb-3 items-end">
@@ -1084,16 +1192,19 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   <p className="font-medium mt-0.5">
                     {quotaData.custom_blog_quota === null ? (
                       <span className="text-muted-foreground italic">
-                        not set (using tier default)
+                        not set (using plan default)
                       </span>
-                    ) : quotaData.custom_blog_quota >= 999 ? (
-                      <Badge variant="secondary">Unlimited (999)</Badge>
                     ) : (
                       <span>
                         <span className="font-mono">
                           {quotaData.custom_blog_quota}
                         </span>{" "}
                         blogs / period
+                        {quotaData.custom_blog_quota >= 999 && (
+                          <span className="text-xs text-amber-600 ml-2">
+                            (hard cap — not unlimited)
+                          </span>
+                        )}
                       </span>
                     )}
                   </p>
@@ -1167,18 +1278,24 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                     disabled={quotaSaving}
                     className="cursor-pointer"
                   >
-                    80 (Scale)
+                    80 (Premium)
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => handleQuotaSet(999)}
+                    onClick={() => handleQuotaSet(1000)}
                     disabled={quotaSaving}
                     className="cursor-pointer"
+                    title="Hard cap of 1000 blogs/period — admin override for enterprise / internal accounts. NOT unlimited; customer gets blocked on the 1001st blog."
                   >
-                    Unlimited (999)
+                    1000 (Internal)
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  No unlimited sentinel — every value above is a hard cap. The only way to grant
+                  truly unlimited generation is a NULL <span className="font-mono">plan_code</span> on{" "}
+                  <span className="font-mono">module_activations</span> (legacy 'active' tier path).
+                </p>
               </div>
 
               {/* Custom value input */}
