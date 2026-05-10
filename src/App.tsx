@@ -639,9 +639,11 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     if (n > 10000) {
       // 10k is plenty of room above the largest legitimate enterprise plan;
       // anything larger is almost certainly a typo (300 → 3000 → 30000).
+      // No "unlimited" sentinel — every integer is a hard cap, so a typo
+      // 30000 silently grants 30000 blogs and over-spends Claude credits.
       setQuotaMsg({
         type: "error",
-        text: `Custom quota of ${n} looks unusually high. Use 999 for "unlimited" instead, or contact engineering if you genuinely need >10,000.`,
+        text: `Custom quota of ${n} looks unusually high (likely a typo). Re-enter the intended cap, or contact engineering if you genuinely need more than 10,000.`,
       });
       return;
     }
@@ -1199,12 +1201,10 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                         <span className="font-mono">
                           {quotaData.custom_blog_quota}
                         </span>{" "}
-                        blogs / period
-                        {quotaData.custom_blog_quota >= 999 && (
-                          <span className="text-xs text-amber-600 ml-2">
-                            (hard cap — not unlimited)
-                          </span>
-                        )}
+                        blogs / period{" "}
+                        <span className="text-xs text-muted-foreground">
+                          (hard cap)
+                        </span>{" "}
                       </span>
                     )}
                   </p>
@@ -1280,21 +1280,15 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   >
                     80 (Premium)
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleQuotaSet(1000)}
-                    disabled={quotaSaving}
-                    className="cursor-pointer"
-                    title="Hard cap of 1000 blogs/period — admin override for enterprise / internal accounts. NOT unlimited; customer gets blocked on the 1001st blog."
-                  >
-                    1000 (Internal)
-                  </Button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  No unlimited sentinel — every value above is a hard cap. The only way to grant
-                  truly unlimited generation is a NULL <span className="font-mono">plan_code</span> on{" "}
-                  <span className="font-mono">module_activations</span> (legacy 'active' tier path).
+                  Quick-set buttons match the seeded plan tiers (3 / 30 / 50 / 80).
+                  For any other cap (enterprise deals, support comp), use the custom
+                  value field below. Every value is a hard cap — there is no unlimited
+                  sentinel. The only unlimited path is a NULL{" "}
+                  <span className="font-mono">plan_code</span> on{" "}
+                  <span className="font-mono">module_activations</span> (legacy
+                  'active' tier path).
                 </p>
               </div>
 
