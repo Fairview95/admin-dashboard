@@ -330,6 +330,19 @@ function fmtShortDate(d: string) {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// Format a date-only string (YYYY-MM-DD) as a UTC date. Distinct from
+// fmtDate which assumes its input is a full ISO timestamp and renders
+// in the user's local timezone. Use this for backend fields that carry
+// only a calendar date — e.g. leaderboardData.date — so an admin in
+// US-Pacific doesn't see "May 10" when they picked May 11 UTC.
+function fmtUtcDate(d: string) {
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
+  });
+}
+
 // Provider color classes — summary bar uses bordered variant, row badges use lighter variant
 const PROVIDER_COLORS: Record<string, { summary: string; row: string }> = {
   claude:  { summary: "bg-orange-100 text-orange-700 border-orange-200", row: "bg-orange-50 text-orange-600" },
@@ -960,7 +973,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
               <div className="grid grid-cols-3 gap-3">
                 <div className="border border-border rounded-lg p-3 bg-card">
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                    Platform Spend · {fmtDate(leaderboardData.date)}
+                    Platform Spend · {fmtUtcDate(leaderboardData.date)}
                   </p>
                   <p className="text-xl font-semibold mt-1">${leaderboardData.platform_total_cost_usd.toFixed(2)}</p>
                 </div>
