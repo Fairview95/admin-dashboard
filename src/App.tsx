@@ -1009,6 +1009,8 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                         <th className="px-3 py-2 font-medium text-muted-foreground text-right">LocalSEO $</th>
                         <th className="px-3 py-2 font-medium text-muted-foreground text-right">Claude $</th>
                         <th className="px-3 py-2 font-medium text-muted-foreground text-right">Gemini $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">OpenAI $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Other $</th>
                         <th className="px-3 py-2 font-medium text-muted-foreground text-right">Calls</th>
                         <th className="px-3 py-2 font-medium text-muted-foreground text-right">Images</th>
                       </tr>
@@ -1020,6 +1022,14 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                         const localseoCost = row.by_service.localseo ?? 0;
                         const claudeCost = row.by_provider.claude ?? 0;
                         const geminiCost = row.by_provider.gemini ?? 0;
+                        const openaiCost = row.by_provider.openai ?? 0;
+                        // "Other $" captures any future provider (bfl, fal, recraft, etc.)
+                        // so the per-provider columns always sum to total_cost_usd and we
+                        // never silently drop a new image-provider's spend off the table.
+                        // Computed as Total minus the three explicit columns so floating-
+                        // point rounding can't make it slightly negative — clamp at 0.
+                        const knownProviderTotal = claudeCost + geminiCost + openaiCost;
+                        const otherCost = Math.max(0, row.total_cost_usd - knownProviderTotal);
                         // Highlight the #1 spender — quick visual cue without scanning numbers.
                         const isTop = row.rank === 1;
                         return (
@@ -1036,6 +1046,8 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                             <td className="px-3 py-2 text-right">{localseoCost > 0 ? `$${localseoCost.toFixed(2)}` : "—"}</td>
                             <td className="px-3 py-2 text-right">{claudeCost > 0 ? `$${claudeCost.toFixed(2)}` : "—"}</td>
                             <td className="px-3 py-2 text-right">{geminiCost > 0 ? `$${geminiCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{openaiCost > 0 ? `$${openaiCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{otherCost >= 0.005 ? `$${otherCost.toFixed(2)}` : "—"}</td>
                             <td className="px-3 py-2 text-right">{row.calls.toLocaleString()}</td>
                             <td className="px-3 py-2 text-right">{row.images.toLocaleString()}</td>
                           </tr>
