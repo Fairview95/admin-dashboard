@@ -104,6 +104,31 @@ interface UsageData {
   projects: UsageProject[];
 }
 
+interface LeaderboardRow {
+  rank: number;
+  account_id: string;
+  account_name: string;
+  account_slug: string;
+  owner_email: string;
+  total_cost_usd: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  images: number;
+  by_service: Record<string, number>;
+  by_provider: Record<string, number>;
+}
+
+interface LeaderboardData {
+  date: string;
+  limit: number;
+  platform_total_cost_usd: number;
+  platform_total_calls: number;
+  active_accounts: number;
+  truncated: boolean;
+  leaderboard: LeaderboardRow[];
+}
+
 // --- Constants ---
 
 const PLAN_LABELS: Record<string, string> = {
@@ -224,6 +249,13 @@ function api(key: string) {
       if (params.project_id) searchParams.set("project_id", params.project_id);
       if (params.days) searchParams.set("days", params.days.toString());
       const res = await fetch(`${API_URL}/api/v1/admin/usage?${searchParams}`, { headers });
+      return handleResponse(res);
+    },
+    async getLeaderboard(params: { date?: string; limit?: number } = {}): Promise<LeaderboardData> {
+      const searchParams = new URLSearchParams();
+      if (params.date) searchParams.set("date", params.date);
+      if (params.limit) searchParams.set("limit", params.limit.toString());
+      const res = await fetch(`${API_URL}/api/v1/admin/usage/leaderboard?${searchParams}`, { headers });
       return handleResponse(res);
     },
   };
@@ -350,6 +382,16 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [usageEmail, setUsageEmail] = useState("");
   const [usageSort, setUsageSort] = useState<"cost" | "tokens" | "images">("cost");
 
+  // Daily leaderboard state — date-pinned, top-N accounts across all modules.
+  // Default date = today (UTC) so the page shows the current spend leaderboard
+  // on first paint without the admin needing to pick anything.
+  const todayUTC = new Date().toISOString().slice(0, 10);
+  const [leaderboardDate, setLeaderboardDate] = useState(todayUTC);
+  const [leaderboardLimit, setLeaderboardLimit] = useState("10");
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardData | null>(null);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
+
   const loadAccounts = useCallback(async () => {
     setAccountsError(null);
     try {
@@ -378,6 +420,22 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       setUsageLoading(false);
     }
   }, [client, usageDays]);
+
+  const loadLeaderboard = useCallback(async () => {
+    setLeaderboardLoading(true);
+    setLeaderboardError(null);
+    try {
+      const data = await client.getLeaderboard({
+        date: leaderboardDate || undefined,
+        limit: parseInt(leaderboardLimit) || 10,
+      });
+      setLeaderboardData(data);
+    } catch (err) {
+      setLeaderboardError(err instanceof Error ? err.message : "Failed to load leaderboard");
+    } finally {
+      setLeaderboardLoading(false);
+    }
+  }, [client, leaderboardDate, leaderboardLimit]);
 
   const handleLookup = async () => {
     if (!email.trim()) return;
@@ -853,6 +911,124 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                         <td className="px-4 py-2 text-right">${usageData.total_cost_usd.toFixed(2)}</td>
                       </tr>
                     </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* ============ DAILY USAGE LEADERBOARD ============ */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Daily Leaderboard</h2>
+
+          <div className="flex gap-2 mb-3 items-end flex-wrap">
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Date (UTC)</p>
+              <Input
+                type="date"
+                value={leaderboardDate}
+                onChange={(e) => setLeaderboardDate(e.target.value)}
+                max={todayUTC}
+                className="w-[160px] h-9"
+              />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Top N</p>
+              <Select value={leaderboardLimit} onValueChange={setLeaderboardLimit}>
+                <SelectTrigger className="w-[100px] h-9 cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5" className="cursor-pointer">Top 5</SelectItem>
+                  <SelectItem value="10" className="cursor-pointer">Top 10</SelectItem>
+                  <SelectItem value="20" className="cursor-pointer">Top 20</SelectItem>
+                  <SelectItem value="50" className="cursor-pointer">Top 50</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={loadLeaderboard} disabled={leaderboardLoading || !leaderboardDate} className="h-9 px-4 cursor-pointer">
+              {leaderboardLoading ? <Spinner /> : "Load Leaderboard"}
+            </Button>
+          </div>
+
+          {leaderboardError && <p className="text-sm text-destructive mb-3">{leaderboardError}</p>}
+
+          {leaderboardData && (
+            <div className="space-y-3">
+              {/* Platform totals for the selected day */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Platform Spend · {fmtDate(leaderboardData.date)}
+                  </p>
+                  <p className="text-xl font-semibold mt-1">${leaderboardData.platform_total_cost_usd.toFixed(2)}</p>
+                </div>
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Calls</p>
+                  <p className="text-xl font-semibold mt-1">{leaderboardData.platform_total_calls.toLocaleString()}</p>
+                </div>
+                <div className="border border-border rounded-lg p-3 bg-card">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Active Accounts</p>
+                  <p className="text-xl font-semibold mt-1">{leaderboardData.active_accounts.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {leaderboardData.truncated && (
+                <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Result was truncated at the row cap. Numbers below underestimate actual spend for very active days.
+                </p>
+              )}
+
+              {leaderboardData.leaderboard.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No API usage recorded on this date.</p>
+              ) : (
+                <div className="overflow-x-auto border border-border rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/40">
+                      <tr className="text-left">
+                        <th className="px-3 py-2 font-medium text-muted-foreground">#</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground">Account</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground">Owner</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Total $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Blog $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Social $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">LocalSEO $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Claude $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Gemini $</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Calls</th>
+                        <th className="px-3 py-2 font-medium text-muted-foreground text-right">Images</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {leaderboardData.leaderboard.map((row) => {
+                        const blogCost = row.by_service.blog ?? 0;
+                        const socialCost = row.by_service.social ?? 0;
+                        const localseoCost = row.by_service.localseo ?? 0;
+                        const claudeCost = row.by_provider.claude ?? 0;
+                        const geminiCost = row.by_provider.gemini ?? 0;
+                        // Highlight the #1 spender — quick visual cue without scanning numbers.
+                        const isTop = row.rank === 1;
+                        return (
+                          <tr key={row.account_id} className={`border-t border-border ${isTop ? "bg-amber-50/50" : ""}`}>
+                            <td className="px-3 py-2 font-medium">{row.rank}</td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium">{row.account_name}</div>
+                              <div className="text-xs text-muted-foreground">{row.account_slug}</div>
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">{row.owner_email}</td>
+                            <td className="px-3 py-2 text-right font-semibold">${row.total_cost_usd.toFixed(2)}</td>
+                            <td className="px-3 py-2 text-right">{blogCost > 0 ? `$${blogCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{socialCost > 0 ? `$${socialCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{localseoCost > 0 ? `$${localseoCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{claudeCost > 0 ? `$${claudeCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{geminiCost > 0 ? `$${geminiCost.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2 text-right">{row.calls.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right">{row.images.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
                   </table>
                 </div>
               )}
