@@ -133,7 +133,13 @@ interface FailedJobRow {
   blog_id: string;
   project_id: string;
   title: string | null;
-  status: "generation_failed" | "publish_failed";
+  // generation_failed / publish_failed = terminal failed states
+  // generating / text_ready_images_pending = stuck (>45min, reaper-eligible)
+  status:
+    | "generation_failed"
+    | "publish_failed"
+    | "generating"
+    | "text_ready_images_pending";
   scheduled_date: string | null;
   gen_attempts: number | null;
   gen_last_error: string | null;
@@ -287,7 +293,7 @@ function api(key: string) {
       return handleResponse(res);
     },
     async listFailedJobs(params: {
-      status_filter?: "generation_failed" | "publish_failed";
+      status_filter?: "generation_failed" | "publish_failed" | "stuck_generating";
       limit?: number;
       offset?: number;
     } = {}): Promise<FailedJobsData> {
@@ -458,7 +464,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [failedJobsData, setFailedJobsData] = useState<FailedJobsData | null>(null);
   const [failedJobsLoading, setFailedJobsLoading] = useState(false);
   const [failedJobsError, setFailedJobsError] = useState<string | null>(null);
-  const [failedJobsFilter, setFailedJobsFilter] = useState<"" | "generation_failed" | "publish_failed">("");
+  const [failedJobsFilter, setFailedJobsFilter] = useState<
+    "" | "generation_failed" | "publish_failed" | "stuck_generating"
+  >("");
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [failedJobsMsg, setFailedJobsMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -1252,12 +1260,15 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
             <div className="flex items-center gap-2">
               <select
                 value={failedJobsFilter}
-                onChange={(e) => setFailedJobsFilter(e.target.value as "" | "generation_failed" | "publish_failed")}
+                onChange={(e) => setFailedJobsFilter(
+                  e.target.value as "" | "generation_failed" | "publish_failed" | "stuck_generating"
+                )}
                 className="h-9 px-3 rounded-md border border-input bg-background text-sm"
               >
-                <option value="">All failures</option>
+                <option value="">All failures + stuck</option>
                 <option value="generation_failed">generation_failed</option>
                 <option value="publish_failed">publish_failed</option>
+                <option value="stuck_generating">stuck_generating (worker crashed)</option>
               </select>
               <Button
                 onClick={loadFailedJobs}
@@ -1304,18 +1315,20 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   </thead>
                   <tbody>
                     {failedJobsData.rows.map((row) => {
-                      const isGen = row.status === "generation_failed";
-                      const errorText = isGen ? row.gen_last_error : row.publish_last_error;
-                      const attempts = isGen ? row.gen_attempts : row.publish_attempts;
+                      const isStuck = row.status === "generating" || row.status === "text_ready_images_pending";
+                      const isPublishFailed = row.status === "publish_failed";
+                      const errorText = isPublishFailed ? row.publish_last_error : row.gen_last_error;
+                      const attempts = isPublishFailed ? row.publish_attempts : row.gen_attempts;
+                      const statusClass = isStuck
+                        ? "bg-amber-100 text-amber-700"
+                        : isPublishFailed
+                          ? "bg-orange-100 text-orange-700"
+                          : "bg-rose-100 text-rose-700";
                       return (
                         <tr key={row.blog_id} className="border-b border-border last:border-0 hover:bg-muted/20">
                           <td className="px-4 py-2.5">
-                            <span className={`inline-block px-2 py-0.5 text-xs rounded ${
-                              isGen
-                                ? "bg-rose-100 text-rose-700"
-                                : "bg-orange-100 text-orange-700"
-                            }`}>
-                              {row.status}
+                            <span className={`inline-block px-2 py-0.5 text-xs rounded ${statusClass}`}>
+                              {isStuck ? `stuck (${row.status})` : row.status}
                             </span>
                           </td>
                           <td className="px-4 py-2.5">
