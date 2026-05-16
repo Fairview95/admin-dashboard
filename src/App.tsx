@@ -483,9 +483,6 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   }, [client]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
-  // Auto-load failed jobs on mount so ops see fresh status without
-  // having to click. Re-runs when the status filter changes.
-  useEffect(() => { loadFailedJobs(); }, [loadFailedJobs]);
 
   const loadUsage = useCallback(async (filterEmail?: string) => {
     setUsageLoading(true);
@@ -534,6 +531,13 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       setFailedJobsLoading(false);
     }
   }, [client, failedJobsFilter]);
+
+  // Auto-load failed jobs on mount so ops see fresh status without
+  // having to click. Re-runs when the status filter changes.
+  // Declared AFTER loadFailedJobs so TypeScript's
+  // "used-before-declaration" check passes — useCallback captures a
+  // fresh closure each render and the dep array correctly tracks it.
+  useEffect(() => { loadFailedJobs(); }, [loadFailedJobs]);
 
   const handleRetryFailedJob = async (blogId: string) => {
     setRetryingJobId(blogId);
