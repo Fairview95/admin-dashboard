@@ -129,6 +129,40 @@ interface LeaderboardData {
   leaderboard: LeaderboardRow[];
 }
 
+interface FailedJobRow {
+  blog_id: string;
+  project_id: string;
+  title: string | null;
+  // generation_failed / publish_failed = terminal failed states
+  // generating / text_ready_images_pending = stuck (>45min, reaper-eligible)
+  status:
+    | "generation_failed"
+    | "publish_failed"
+    | "generating"
+    | "text_ready_images_pending";
+  scheduled_date: string | null;
+  gen_attempts: number | null;
+  gen_last_error: string | null;
+  publish_attempts: number | null;
+  publish_last_error: string | null;
+  updated_at: string | null;
+}
+
+interface FailedJobsData {
+  rows: FailedJobRow[];
+  total_count: number;
+  limit: number;
+  offset: number;
+}
+
+interface RetryJobResponse {
+  success: boolean;
+  blog_id: string;
+  from_status: string;
+  to_status: string;
+  message: string;
+}
+
 // --- Constants ---
 
 const PLAN_LABELS: Record<string, string> = {
@@ -256,6 +290,27 @@ function api(key: string) {
       if (params.date) searchParams.set("date", params.date);
       if (params.limit) searchParams.set("limit", params.limit.toString());
       const res = await fetch(`${API_URL}/api/v1/admin/usage/leaderboard?${searchParams}`, { headers });
+      return handleResponse(res);
+    },
+    async listFailedJobs(params: {
+      status_filter?: "generation_failed" | "publish_failed" | "stuck_generating";
+      limit?: number;
+      offset?: number;
+    } = {}): Promise<FailedJobsData> {
+      const searchParams = new URLSearchParams();
+      if (params.status_filter) searchParams.set("status_filter", params.status_filter);
+      if (params.limit) searchParams.set("limit", params.limit.toString());
+      if (params.offset) searchParams.set("offset", params.offset.toString());
+      const qs = searchParams.toString();
+      const url = `${API_URL}/api/v1/admin/failed-jobs${qs ? "?" + qs : ""}`;
+      const res = await fetch(url, { headers });
+      return handleResponse(res);
+    },
+    async retryFailedJob(blogId: string): Promise<RetryJobResponse> {
+      const res = await fetch(`${API_URL}/api/v1/admin/jobs/${encodeURIComponent(blogId)}/retry`, {
+        method: "POST",
+        headers,
+      });
       return handleResponse(res);
     },
   };
@@ -405,6 +460,16 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
 
+  // Failed jobs (cron-pipeline triage)
+  const [failedJobsData, setFailedJobsData] = useState<FailedJobsData | null>(null);
+  const [failedJobsLoading, setFailedJobsLoading] = useState(false);
+  const [failedJobsError, setFailedJobsError] = useState<string | null>(null);
+  const [failedJobsFilter, setFailedJobsFilter] = useState<
+    "" | "generation_failed" | "publish_failed" | "stuck_generating"
+  >("");
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  const [failedJobsMsg, setFailedJobsMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   const loadAccounts = useCallback(async () => {
     setAccountsError(null);
     try {
@@ -418,6 +483,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   }, [client]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+  // Auto-load failed jobs on mount so ops see fresh status without
+  // having to click. Re-runs when the status filter changes.
+  useEffect(() => { loadFailedJobs(); }, [loadFailedJobs]);
 
   const loadUsage = useCallback(async (filterEmail?: string) => {
     setUsageLoading(true);
@@ -449,6 +517,44 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       setLeaderboardLoading(false);
     }
   }, [client, leaderboardDate, leaderboardLimit]);
+
+  const loadFailedJobs = useCallback(async () => {
+    setFailedJobsLoading(true);
+    setFailedJobsError(null);
+    try {
+      const data = await client.listFailedJobs({
+        status_filter: failedJobsFilter || undefined,
+        limit: 50,
+        offset: 0,
+      });
+      setFailedJobsData(data);
+    } catch (err) {
+      setFailedJobsError(err instanceof Error ? err.message : "Failed to load failed jobs");
+    } finally {
+      setFailedJobsLoading(false);
+    }
+  }, [client, failedJobsFilter]);
+
+  const handleRetryFailedJob = async (blogId: string) => {
+    setRetryingJobId(blogId);
+    setFailedJobsMsg(null);
+    try {
+      const result = await client.retryFailedJob(blogId);
+      setFailedJobsMsg({
+        type: "success",
+        text: `${result.message} (${result.from_status} → ${result.to_status})`,
+      });
+      // Refresh the list so the retried row drops out.
+      await loadFailedJobs();
+    } catch (err) {
+      setFailedJobsMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "Retry failed",
+      });
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
 
   const handleLookup = async () => {
     if (!email.trim()) return;
@@ -1140,6 +1246,134 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                 </tbody>
               </table>
             </div>
+          )}
+        </section>
+
+        {/* Failed Jobs — cron-pipeline triage. Lists rows in generation_failed
+            or publish_failed terminal states with per-row Retry buttons that
+            resurrect the row so the next cron scan re-attempts it. */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              Failed Jobs (Cron)
+            </h2>
+            <div className="flex items-center gap-2">
+              <select
+                value={failedJobsFilter}
+                onChange={(e) => setFailedJobsFilter(
+                  e.target.value as "" | "generation_failed" | "publish_failed" | "stuck_generating"
+                )}
+                className="h-9 px-3 rounded-md border border-input bg-background text-sm"
+              >
+                <option value="">All failures + stuck</option>
+                <option value="generation_failed">generation_failed</option>
+                <option value="publish_failed">publish_failed</option>
+                <option value="stuck_generating">stuck_generating (worker crashed)</option>
+              </select>
+              <Button
+                onClick={loadFailedJobs}
+                disabled={failedJobsLoading}
+                variant="outline"
+                className="h-9 px-3 cursor-pointer"
+              >
+                {failedJobsLoading ? <Spinner className="h-4 w-4" /> : "Refresh"}
+              </Button>
+            </div>
+          </div>
+
+          <Message msg={failedJobsMsg} />
+
+          {failedJobsError && (
+            <p className="text-sm text-destructive mb-3">{failedJobsError}</p>
+          )}
+
+          {failedJobsLoading && !failedJobsData ? (
+            <div className="flex justify-center py-8">
+              <Spinner className="h-5 w-5 text-muted-foreground" />
+            </div>
+          ) : !failedJobsData || failedJobsData.rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              No failed jobs. Pipeline is healthy.
+            </p>
+          ) : (
+            <>
+              <div className="text-xs text-muted-foreground mb-2">
+                Showing {failedJobsData.rows.length} of {failedJobsData.total_count} failed jobs
+                {failedJobsFilter ? ` (filter: ${failedJobsFilter})` : ""}.
+              </div>
+              <div className="border border-border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30 text-xs text-muted-foreground uppercase tracking-wider">
+                      <th className="text-left px-4 py-2 font-medium">Status</th>
+                      <th className="text-left px-4 py-2 font-medium">Blog</th>
+                      <th className="text-left px-4 py-2 font-medium">Attempts</th>
+                      <th className="text-left px-4 py-2 font-medium">Error</th>
+                      <th className="text-left px-4 py-2 font-medium">Updated</th>
+                      <th className="text-right px-4 py-2 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {failedJobsData.rows.map((row) => {
+                      const isStuck = row.status === "generating" || row.status === "text_ready_images_pending";
+                      const isPublishFailed = row.status === "publish_failed";
+                      const errorText = isPublishFailed ? row.publish_last_error : row.gen_last_error;
+                      const attempts = isPublishFailed ? row.publish_attempts : row.gen_attempts;
+                      const statusClass = isStuck
+                        ? "bg-amber-100 text-amber-700"
+                        : isPublishFailed
+                          ? "bg-orange-100 text-orange-700"
+                          : "bg-rose-100 text-rose-700";
+                      return (
+                        <tr key={row.blog_id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-block px-2 py-0.5 text-xs rounded ${statusClass}`}>
+                              {isStuck ? `stuck (${row.status})` : row.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <div className="font-medium truncate max-w-[280px]" title={row.title || ""}>
+                              {row.title || "(no title)"}
+                            </div>
+                            <div className="text-xs text-muted-foreground font-mono">
+                              {row.blog_id.slice(0, 8)}... · {row.scheduled_date || "no date"}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-muted-foreground">
+                            {attempts ?? "—"}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <div
+                              className="text-xs text-muted-foreground truncate max-w-[320px]"
+                              title={errorText || ""}
+                            >
+                              {errorText || "(no error message)"}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                            {row.updated_at ? fmtShortDate(row.updated_at) : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Button
+                              onClick={() => handleRetryFailedJob(row.blog_id)}
+                              disabled={retryingJobId === row.blog_id}
+                              variant="outline"
+                              className="h-8 px-3 text-xs cursor-pointer"
+                            >
+                              {retryingJobId === row.blog_id ? (
+                                <Spinner className="h-3 w-3" />
+                              ) : (
+                                "Retry"
+                              )}
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
       </main>
