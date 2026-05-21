@@ -58,6 +58,49 @@ interface DemoAccount {
   expired: boolean;
 }
 
+interface BlogQuotaData {
+  email: string;
+  account_id: string;
+  plan_code: string | null;
+  plan_display_name: string | null;
+  plan_monthly_quota: number | null;
+  plan_duration_days: number | null;
+  legacy_status: string | null;        // 'trial' | 'pro30' | 'active' | etc.
+  custom_blog_quota: number | null;    // override (monthly cadence), null = no override
+  override_reason: string | null;
+  effective_quota: number | null;      // total over the period (cadence × months)
+  period_start: string | null;
+  period_end: string | null;
+  used_this_period: number;
+}
+
+// Subscription plan as defined in core.subscription_plans (migration 058).
+// Fetched dynamically via GET /api/v1/admin/plans so the dashboard reflects
+// the DB without needing a frontend deploy when admin adds new tiers.
+interface Plan {
+  code: string;
+  display_name: string;
+  module_code: string;
+  billing_cycle: string;                 // 'monthly' / '6_month' / 'yearly' / 'trial'
+  duration_days: number;
+  monthly_price_usd: number | null;
+  annual_price_usd: number | null;
+  bundle_code: string | null;
+  monthly_blog_quota: number | null;     // per-month cadence from plan_features
+  blogs_per_period: number | null;       // cadence × months_in_period
+  is_active: boolean;
+}
+
+interface ChangePlanResponse {
+  success: boolean;
+  email: string;
+  account_id: string;
+  plan_code: string;
+  affected_activations: number;
+  affected_project_ids: string[];
+  message: string;
+}
+
 interface UserSubscriptionData {
   email: string;
   user_id: string;
@@ -165,10 +208,25 @@ interface RetryJobResponse {
 
 // --- Constants ---
 
+// PLAN_LABELS is now mostly historical — actual plan names come from the
+// backend (GET /api/v1/admin/plans, sourced from core.subscription_plans
+// added in migration 048). Kept here only for backwards-compat display
+// when an old subscription row still references a legacy status string
+// (trial / pro30 / active) and the new plan_code-based mapping isn't
+// available yet.
 const PLAN_LABELS: Record<string, string> = {
   trial: "Trial",
   pro30: "Pro 30",
   active: "Active",
+  // New plan codes (mirrored here so legacy lookups don't return undefined
+  // when the dashboard renders them before the dynamic plans list loads).
+  trial_3day: "Trial (3 days)",
+  monthly_30: "Standard 30 — Monthly",
+  monthly_50: "Growth 50 — Monthly",
+  monthly_80: "Premium 80 — Monthly",
+  yearly_30: "Standard 30 — Annual",
+  yearly_50: "Growth 50 — Annual",
+  yearly_80: "Premium 80 — Annual",
 };
 
 const MODULE_LABELS: Record<string, string> = {
@@ -178,11 +236,21 @@ const MODULE_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
+  // Legacy status values
   trial: "bg-amber-100 text-amber-700",
   pro30: "bg-blue-100 text-blue-700",
   active: "bg-emerald-100 text-emerald-700",
   trialing: "bg-amber-100 text-amber-700",
   expired: "bg-red-100 text-red-600",
+  // New plan codes from migration 048 — colored by tier capacity:
+  // trial = amber (low), monthly_* = blue (mid), yearly_* = emerald (high commitment).
+  trial_3day:  "bg-amber-100 text-amber-700",
+  monthly_30:  "bg-blue-100 text-blue-700",
+  monthly_50:  "bg-blue-100 text-blue-700",
+  monthly_80:  "bg-blue-100 text-blue-700",
+  yearly_30:   "bg-emerald-100 text-emerald-700",
+  yearly_50:   "bg-emerald-100 text-emerald-700",
+  yearly_80:   "bg-emerald-100 text-emerald-700",
 };
 
 // --- Spinner ---
@@ -313,6 +381,57 @@ function api(key: string) {
       });
       return handleResponse(res);
     },
+    async getBlogQuota(email: string): Promise<BlogQuotaData> {
+      const res = await fetch(
+        `${API_URL}/api/v1/admin/get-blog-quota?email=${encodeURIComponent(email)}`,
+        { headers }
+      );
+      return handleResponse(res);
+    },
+    async setBlogQuota(email: string, customBlogQuota: number | null, reason?: string) {
+      const res = await fetch(`${API_URL}/api/v1/admin/set-blog-quota`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          email,
+          custom_blog_quota: customBlogQuota,
+          reason: reason || null,
+        }),
+      });
+      return handleResponse(res);
+    },
+    async listPlans(moduleCode: string = "blog"): Promise<{ plans: Plan[] }> {
+      const res = await fetch(
+        `${API_URL}/api/v1/admin/plans?module_code=${encodeURIComponent(moduleCode)}`,
+        { headers }
+      );
+      return handleResponse(res);
+    },
+    async changePlan(
+      email: string,
+      planCode: string,
+      resetPeriod: boolean,
+      reason?: string,
+      projectId?: string,
+    ): Promise<ChangePlanResponse> {
+      // reset_period=True bumps activated_at and resets the period counter.
+      // project_id optional: omitted = all account projects, set = just that one.
+      const body: Record<string, unknown> = {
+        email,
+        plan_code: planCode,
+        reset_period: resetPeriod,
+        reason: reason || null,
+      };
+      if (projectId) {
+        body.project_id = projectId;
+      }
+      const res = await fetch(`${API_URL}/api/v1/admin/change-plan`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      return handleResponse(res);
+    },
   };
 }
 
@@ -422,6 +541,22 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupMsg, setLookupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Subscription plans loaded from the backend (post-migration-048 source
+  // of truth in core.subscription_plans). Populates plan dropdowns
+  // dynamically so admin can add new tiers without a frontend deploy.
+  const [plans, setPlans] = useState<Plan[]>([]);
+
+  // Blog quota state — separate from generic user lookup so the admin can
+  // adjust quota for one user while keeping a different user open in the
+  // main subscription panel.
+  const [quotaEmail, setQuotaEmail] = useState("");
+  const [quotaData, setQuotaData] = useState<BlogQuotaData | null>(null);
+  const [quotaCustomValue, setQuotaCustomValue] = useState("");
+  const [quotaReason, setQuotaReason] = useState("");
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaSaving, setQuotaSaving] = useState(false);
+  const [quotaMsg, setQuotaMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   // Plan action state — per-module plan/days keyed by "projectId:module"
   const [modulePlans, setModulePlans] = useState<Record<string, string>>({});
   const [moduleDays, setModuleDays] = useState<Record<string, string>>({});
@@ -429,7 +564,26 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [applyConfirm, setApplyConfirm] = useState<{ projectId: string; module: string } | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState<{ projectId: string; module: string } | null>(null);
 
-  const getPlan = (key: string) => modulePlans[key] || "pro30";
+  // Change-plan (advanced) dialog state — uses the new /api/v1/admin/change-plan
+  // endpoint. Period-based model: reset_period bumps activated_at + the
+  // subscription window so the new plan starts with a clean quota counter.
+  // give_fresh_quota was removed — there's no monthly cap to refresh.
+  // project_id is optional: blank = apply to every project the account has
+  // on the blog module; populated = scope to that single project.
+  const [changePlanOpen, setChangePlanOpen] = useState(false);
+  const [changePlanCode, setChangePlanCode] = useState("monthly_30");
+  const [changePlanResetPeriod, setChangePlanResetPeriod] = useState(true);
+  const [changePlanReason, setChangePlanReason] = useState("");
+  const [changePlanProjectId, setChangePlanProjectId] = useState("");
+  const [changePlanLoading, setChangePlanLoading] = useState(false);
+  const [changePlanResult, setChangePlanResult] = useState<ChangePlanResponse | null>(null);
+  const [changePlanError, setChangePlanError] = useState<string | null>(null);
+
+  // Default selection: prefer the new plan_code "monthly_30" (post-migration-048
+  // canonical), fall back to legacy "pro30" if the dynamic plans list isn't
+  // loaded yet — backend's _resolve_plan accepts both via LEGACY_PLAN_ALIAS.
+  const getPlan = (key: string) =>
+    modulePlans[key] || (plans.length > 0 ? "monthly_30" : "pro30");
   const getDays = (key: string) => moduleDays[key] || "";
   const setPlan = (key: string, val: string) => setModulePlans((prev) => ({ ...prev, [key]: val }));
   const setDays = (key: string, val: string) => setModuleDays((prev) => ({ ...prev, [key]: val }));
@@ -483,6 +637,17 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   }, [client]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+
+  // Load plan list once on dashboard mount. Failing silently is acceptable —
+  // the dropdown falls back to legacy hardcoded options if `plans` is empty
+  // (older backends without /admin/plans return 404).
+  useEffect(() => {
+    let cancelled = false;
+    client.listPlans("blog")
+      .then((d) => { if (!cancelled) setPlans(d.plans || []); })
+      .catch((err) => console.warn("[admin] failed to load plans:", err));
+    return () => { cancelled = true; };
+  }, [client]);
 
   const loadUsage = useCallback(async (filterEmail?: string) => {
     setUsageLoading(true);
@@ -577,6 +742,82 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
     }
   };
 
+  // ---- Blog quota handlers ---------------------------------------------
+  const handleQuotaLookup = async () => {
+    if (!quotaEmail.trim()) return;
+    setQuotaLoading(true);
+    setQuotaMsg(null);
+    setQuotaData(null);
+    setQuotaCustomValue("");
+    try {
+      const data = await client.getBlogQuota(quotaEmail.trim());
+      setQuotaData(data);
+      setQuotaCustomValue(
+        data.custom_blog_quota !== null ? String(data.custom_blog_quota) : ""
+      );
+    } catch (err) {
+      setQuotaMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "User not found",
+      });
+    } finally {
+      setQuotaLoading(false);
+    }
+  };
+
+  const handleQuotaSet = async (value: number | null) => {
+    if (!quotaEmail.trim()) return;
+    setQuotaSaving(true);
+    setQuotaMsg(null);
+    try {
+      const result = await client.setBlogQuota(
+        quotaEmail.trim(),
+        value,
+        quotaReason.trim() || undefined
+      );
+      setQuotaMsg({ type: "success", text: result.message });
+      setQuotaReason("");
+      // Refresh the displayed state with the new value
+      const fresh = await client.getBlogQuota(quotaEmail.trim());
+      setQuotaData(fresh);
+      setQuotaCustomValue(
+        fresh.custom_blog_quota !== null ? String(fresh.custom_blog_quota) : ""
+      );
+    } catch (err) {
+      setQuotaMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to update quota",
+      });
+    } finally {
+      setQuotaSaving(false);
+    }
+  };
+
+  const handleQuotaCustomSubmit = async () => {
+    const trimmed = quotaCustomValue.trim();
+    if (!trimmed) return;
+    const n = parseInt(trimmed, 10);
+    if (isNaN(n) || n < 0 || !Number.isFinite(n)) {
+      setQuotaMsg({
+        type: "error",
+        text: "Custom quota must be a non-negative integer.",
+      });
+      return;
+    }
+    if (n > 10000) {
+      // 10k is plenty of room above the largest legitimate enterprise plan;
+      // anything larger is almost certainly a typo (300 → 3000 → 30000).
+      // No "unlimited" sentinel — every integer is a hard cap, so a typo
+      // 30000 silently grants 30000 blogs and over-spends Claude credits.
+      setQuotaMsg({
+        type: "error",
+        text: `Custom quota of ${n} looks unusually high (likely a typo). Re-enter the intended cap, or contact engineering if you genuinely need more than 10,000.`,
+      });
+      return;
+    }
+    await handleQuotaSet(n);
+  };
+
   // Apply plan to a single module of a project
   const handleApplyModule = async (projectId: string, module: string) => {
     if (!email.trim()) return;
@@ -602,6 +843,45 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       setLookupMsg({ type: "error", text: err instanceof Error ? err.message : "Failed" });
     } finally {
       setActingOn(null);
+    }
+  };
+
+  // Change-plan (advanced) — calls the new endpoint with reset_period +
+  // Period-based model: reset_period=True bumps activated_at + the
+  // subscription period_start/period_end so the new plan starts with a
+  // clean quota counter. The backend refuses reset_period=False when
+  // the new plan's duration_days differs from the existing window
+  // (e.g., monthly→yearly) — that 400 surfaces as changePlanError so
+  // the admin can re-submit with reset_period=True.
+  //
+  // project_id is optional. Blank = apply to all of the account's blog
+  // projects (legacy default). Populated = scope to a single project,
+  // useful when one project of a multi-project account needs an
+  // independent plan.
+  const handleChangePlanSubmit = async () => {
+    if (!email.trim() || !userData) return;
+    setChangePlanLoading(true);
+    setChangePlanError(null);
+    setChangePlanResult(null);
+    try {
+      const result = await client.changePlan(
+        email.trim(),
+        changePlanCode,
+        changePlanResetPeriod,
+        changePlanReason.trim() || undefined,
+        changePlanProjectId.trim() || undefined,
+      );
+      setChangePlanResult(result);
+      setChangePlanReason("");
+      setChangePlanProjectId("");
+      // Refresh the user-detail view so the new plan_code shows up
+      const data = await client.getUserSubscription(email.trim());
+      setUserData(data);
+      loadAccounts();
+    } catch (err) {
+      setChangePlanError(err instanceof Error ? err.message : "Failed to change plan");
+    } finally {
+      setChangePlanLoading(false);
     }
   };
 
@@ -691,6 +971,30 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       .reduce((sum, [, data]) => sum + (data.count ?? 0), 0);
 
   const activeCount = accounts.filter((a) => !a.expired).length;
+  const expiredCount = accounts.length - activeCount;
+
+  // "Expiring soon" = accounts with trial_ends_at in the next 3 days.
+  // Helps admin reach out before the customer churns. Skips already-
+  // expired rows (those need a different action: revoke or upgrade).
+  const now = Date.now();
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const expiringSoonCount = accounts.filter((a) => {
+    if (a.expired) return false;
+    if (!a.trial_ends_at) return false;
+    const ts = new Date(a.trial_ends_at).getTime();
+    if (isNaN(ts)) return false;
+    return ts - now <= THREE_DAYS_MS && ts >= now;
+  }).length;
+
+  // Recent signups = granted in the last 7 days. Pulled from the same
+  // /demo-accounts response — no new endpoint call.
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const recentSignupsCount = accounts.filter((a) => {
+    if (!a.granted_at) return false;
+    const ts = new Date(a.granted_at).getTime();
+    if (isNaN(ts)) return false;
+    return now - ts <= SEVEN_DAYS_MS;
+  }).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -705,6 +1009,89 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-8">
+
+        {/* ============ DASHBOARD OVERVIEW ============ */}
+        {/* At-a-glance snapshot derived from the existing /demo-accounts
+            response (already loaded for the Demo Accounts table below).
+            Zero extra API calls. Shows what an admin most often needs to
+            answer when they log in: who's about to churn, who just
+            signed up, where do I focus today. */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Overview
+          </h2>
+          {loadingAccounts ? (
+            <div className="grid grid-cols-4 gap-3">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="border border-border rounded-lg p-3 bg-card">
+                  <div className="h-3 w-20 bg-muted rounded animate-pulse" />
+                  <div className="h-7 w-12 bg-muted rounded animate-pulse mt-2" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-4 gap-3">
+              <div className="border border-border rounded-lg p-3 bg-card">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Active customers
+                </p>
+                <p className="text-2xl font-semibold mt-1">{activeCount}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  of {accounts.length} total demo records
+                </p>
+              </div>
+              <div
+                className={`border rounded-lg p-3 ${
+                  expiringSoonCount > 0
+                    ? "border-amber-300 bg-amber-50"
+                    : "border-border bg-card"
+                }`}
+              >
+                <p
+                  className={`text-xs uppercase tracking-wider ${
+                    expiringSoonCount > 0
+                      ? "text-amber-800"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  Expiring in 3 days
+                </p>
+                <p
+                  className={`text-2xl font-semibold mt-1 ${
+                    expiringSoonCount > 0 ? "text-amber-800" : ""
+                  }`}
+                >
+                  {expiringSoonCount}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {expiringSoonCount > 0
+                    ? "consider proactive outreach"
+                    : "no immediate action"}
+                </p>
+              </div>
+              <div className="border border-border rounded-lg p-3 bg-card">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Signups (7d)
+                </p>
+                <p className="text-2xl font-semibold mt-1">{recentSignupsCount}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  granted in the past week
+                </p>
+              </div>
+              <div className="border border-border rounded-lg p-3 bg-card">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Expired records
+                </p>
+                <p className="text-2xl font-semibold mt-1 text-muted-foreground">
+                  {expiredCount}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  inactive — revoke or upgrade
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
 
         {/* ============ USER LOOKUP + ACTIONS ============ */}
         <section>
@@ -736,7 +1123,22 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   <span className="text-sm font-semibold">{userData.email}</span>
                   <span className="text-xs text-muted-foreground ml-2 font-mono">{userData.account_id.slice(0, 8)}...</span>
                 </div>
-                <span className="text-xs text-muted-foreground">{userData.projects.length} project{userData.projects.length !== 1 ? "s" : ""}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">{userData.projects.length} project{userData.projects.length !== 1 ? "s" : ""}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setChangePlanResult(null);
+                      setChangePlanError(null);
+                      setChangePlanOpen(true);
+                    }}
+                    className="h-7 px-3 text-xs cursor-pointer"
+                    title="Change plan with reset_period + optional project_id scoping. Backend refuses duration-mismatched no-reset switches."
+                  >
+                    Change Plan (Advanced)
+                  </Button>
+                </div>
               </div>
 
               {/* Projects with per-module rows */}
@@ -805,19 +1207,46 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               </td>
                               <td className="px-4 py-2">
                                 <Select value={getPlan(key)} onValueChange={(v) => setPlan(key, v)}>
-                                  <SelectTrigger className="w-[130px] h-7 text-xs cursor-pointer">
+                                  <SelectTrigger className="w-[180px] h-7 text-xs cursor-pointer">
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="trial" className="cursor-pointer">
-                                      <div>Trial <span className="text-muted-foreground">(3d, 3 blogs)</span></div>
-                                    </SelectItem>
-                                    <SelectItem value="pro30" className="cursor-pointer">
-                                      <div>Pro 30 <span className="text-muted-foreground">(30d, 30 blogs)</span></div>
-                                    </SelectItem>
-                                    <SelectItem value="active" className="cursor-pointer">
-                                      <div>Active <span className="text-muted-foreground">(365d, unlimited)</span></div>
-                                    </SelectItem>
+                                    {/* Plans pulled dynamically from core.subscription_plans
+                                        (post-migration-048). Falls back to legacy hardcoded
+                                        options if `plans` hasn't loaded yet (e.g. backend
+                                        without /admin/plans endpoint). */}
+                                    {plans.length > 0 ? (
+                                      plans.map((p) => (
+                                        <SelectItem
+                                          key={p.code}
+                                          value={p.code}
+                                          className="cursor-pointer"
+                                        >
+                                          <div>
+                                            {p.display_name}{" "}
+                                            <span className="text-muted-foreground">
+                                              ({p.duration_days}d
+                                              {p.monthly_blog_quota !== null
+                                                ? `, ${p.monthly_blog_quota} blogs/mo`
+                                                : ", unlimited"}
+                                              )
+                                            </span>
+                                          </div>
+                                        </SelectItem>
+                                      ))
+                                    ) : (
+                                      <>
+                                        <SelectItem value="trial" className="cursor-pointer">
+                                          <div>Trial <span className="text-muted-foreground">(3d, 3 blogs)</span></div>
+                                        </SelectItem>
+                                        <SelectItem value="pro30" className="cursor-pointer">
+                                          <div>Pro 30 <span className="text-muted-foreground">(30d, 30 blogs)</span></div>
+                                        </SelectItem>
+                                        <SelectItem value="active" className="cursor-pointer">
+                                          <div>Active <span className="text-muted-foreground">(365d, unlimited)</span></div>
+                                        </SelectItem>
+                                      </>
+                                    )}
                                   </SelectContent>
                                 </Select>
                               </td>
@@ -861,6 +1290,220 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                   </div>
                 );
               })}
+            </div>
+          )}
+        </section>
+
+        {/* ============ CUSTOM BLOG QUOTA ============ */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Custom Blog Quota
+          </h2>
+          <p className="text-sm text-muted-foreground mb-3">
+            Set a per-account override for the blog generation quota. Wins over the
+            plan default. <span className="font-medium">There is no "unlimited" sentinel</span> —
+            any number you set becomes a hard cap (the customer gets blocked on their
+            Nth blog). Clear the override to fall back to the plan tier default.
+            Effective immediately on the user's next blog generation request.
+          </p>
+
+          <div className="flex gap-2 mb-3 items-end">
+            <Input
+              type="email"
+              placeholder="user@example.com"
+              value={quotaEmail}
+              onChange={(e) => setQuotaEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleQuotaLookup()}
+              className="max-w-[280px] h-9"
+            />
+            <Button
+              onClick={handleQuotaLookup}
+              disabled={quotaLoading || !quotaEmail.trim()}
+              className="h-9 px-4 cursor-pointer"
+            >
+              {quotaLoading ? <Spinner /> : "Look up"}
+            </Button>
+          </div>
+
+          {quotaMsg && (
+            <p
+              className={`text-sm mb-3 ${
+                quotaMsg.type === "success" ? "text-green-700" : "text-destructive"
+              }`}
+            >
+              {quotaMsg.text}
+            </p>
+          )}
+
+          {quotaData && (
+            <div className="border border-border rounded-lg p-4 bg-card space-y-4 max-w-2xl">
+              {/* Current state */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Plan
+                  </p>
+                  <p className="font-medium mt-0.5">
+                    {quotaData.plan_display_name ?? quotaData.plan_code ?? quotaData.legacy_status ?? "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Effective quota (per period)
+                  </p>
+                  <p className="font-medium mt-0.5 font-mono">
+                    {quotaData.effective_quota ?? "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Custom override
+                  </p>
+                  <p className="font-medium mt-0.5">
+                    {quotaData.custom_blog_quota === null ? (
+                      <span className="text-muted-foreground italic">
+                        not set (using plan default)
+                      </span>
+                    ) : (
+                      <span>
+                        <span className="font-mono">
+                          {quotaData.custom_blog_quota}
+                        </span>{" "}
+                        blogs / period{" "}
+                        <span className="text-xs text-muted-foreground">
+                          (hard cap)
+                        </span>{" "}
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Used this period
+                  </p>
+                  <p className="font-medium mt-0.5 font-mono">
+                    {quotaData.used_this_period}
+                  </p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Period
+                  </p>
+                  <p className="font-medium mt-0.5 text-xs">
+                    {quotaData.period_start ? fmtDate(quotaData.period_start) : "—"}
+                    {" → "}
+                    {quotaData.period_end ? fmtDate(quotaData.period_end) : "—"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick set buttons */}
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Quick set
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(null)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    Use plan default
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(3)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    3 (Trial)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(30)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    30 (Standard)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(50)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    50 (Growth)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleQuotaSet(80)}
+                    disabled={quotaSaving}
+                    className="cursor-pointer"
+                  >
+                    80 (Premium)
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Quick-set buttons match the seeded plan tiers (3 / 30 / 50 / 80).
+                  For any other cap (enterprise deals, support comp), use the custom
+                  value field below. Every value is a hard cap — there is no unlimited
+                  sentinel. The only unlimited path is a NULL{" "}
+                  <span className="font-mono">plan_code</span> on{" "}
+                  <span className="font-mono">module_activations</span> (legacy
+                  'active' tier path).
+                </p>
+              </div>
+
+              {/* Custom value input */}
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Or set custom value
+                </p>
+                <div className="flex gap-2 items-center">
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder="e.g. 75"
+                    value={quotaCustomValue}
+                    onChange={(e) => setQuotaCustomValue(e.target.value)}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" && handleQuotaCustomSubmit()
+                    }
+                    className="w-32 h-9"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    blogs / billing period
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={handleQuotaCustomSubmit}
+                    disabled={quotaSaving || !quotaCustomValue.trim()}
+                    className="ml-2 cursor-pointer"
+                  >
+                    {quotaSaving ? <Spinner /> : "Apply"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Optional reason */}
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Reason (optional, logged to server)
+                </p>
+                <Input
+                  type="text"
+                  placeholder="e.g. customer comp for bug, enterprise deal #4521"
+                  value={quotaReason}
+                  onChange={(e) => setQuotaReason(e.target.value)}
+                  className="h-9"
+                />
+              </div>
             </div>
           )}
         </section>
@@ -1381,6 +2024,159 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
           )}
         </section>
       </main>
+
+      {/* Change-plan (Advanced) dialog — uses /api/v1/admin/change-plan */}
+      <AlertDialog
+        open={changePlanOpen}
+        onOpenChange={(open) => {
+          if (!open && !changePlanLoading) {
+            setChangePlanOpen(false);
+          }
+        }}
+      >
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Change Plan (Advanced)</AlertDialogTitle>
+            <AlertDialogDescription>
+              Switch <span className="font-semibold text-foreground">{userData?.email}</span> to a new plan.
+              Reset_period restarts the subscription window today (clean quota counter).
+              Leave Project ID empty to apply to all of the account's blog projects, or
+              paste a UUID to scope to one project.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Plan</label>
+              <Select
+                value={changePlanCode}
+                onValueChange={setChangePlanCode}
+                disabled={changePlanLoading}
+              >
+                <SelectTrigger className="w-full mt-1 cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {plans.length > 0 ? (
+                    plans.map((p) => (
+                      <SelectItem key={p.code} value={p.code} className="cursor-pointer">
+                        {p.display_name} ({p.monthly_blog_quota ?? "—"} blogs/mo)
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <>
+                      <SelectItem value="trial_3day" className="cursor-pointer">Trial (3 days)</SelectItem>
+                      <SelectItem value="monthly_30" className="cursor-pointer">Standard 30 — Monthly</SelectItem>
+                      <SelectItem value="monthly_50" className="cursor-pointer">Growth 50 — Monthly</SelectItem>
+                      <SelectItem value="monthly_80" className="cursor-pointer">Premium 80 — Monthly</SelectItem>
+                      <SelectItem value="yearly_30" className="cursor-pointer">Standard 30 — Annual</SelectItem>
+                      <SelectItem value="yearly_50" className="cursor-pointer">Growth 50 — Annual</SelectItem>
+                      <SelectItem value="yearly_80" className="cursor-pointer">Premium 80 — Annual</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={changePlanResetPeriod}
+                onChange={(e) => setChangePlanResetPeriod(e.target.checked)}
+                disabled={changePlanLoading}
+                className="cursor-pointer"
+              />
+              <span>Reset subscription period to today</span>
+              <span className="text-xs text-muted-foreground">(default; required when duration changes)</span>
+            </label>
+
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Project ID (optional)
+              </label>
+              <Input
+                value={changePlanProjectId}
+                onChange={(e) => setChangePlanProjectId(e.target.value)}
+                placeholder="leave blank to apply to all account projects"
+                disabled={changePlanLoading}
+                className="mt-1 font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Multi-project accounts: paste a project UUID to change just that one.
+              </p>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Reason (optional)</label>
+              <Input
+                value={changePlanReason}
+                onChange={(e) => setChangePlanReason(e.target.value)}
+                placeholder="e.g. customer requested upgrade"
+                disabled={changePlanLoading}
+                className="mt-1"
+              />
+            </div>
+
+            {changePlanError && (
+              <div className="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+                {changePlanError}
+              </div>
+            )}
+
+            {changePlanResult && (
+              <div className="rounded border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-950/20 p-2 text-xs space-y-1">
+                <div className="font-medium text-emerald-700 dark:text-emerald-400">{changePlanResult.message}</div>
+                <div className="text-muted-foreground">
+                  Plan code updated. Customer fills new capacity themselves
+                  via "Generate more" (one batch Claude call per request).
+                </div>
+                {changePlanResult.affected_project_ids && changePlanResult.affected_project_ids.length > 0 && (
+                  <div>
+                    <div className="text-muted-foreground">
+                      Affected project{changePlanResult.affected_project_ids.length === 1 ? "" : "s"}
+                      {" "}({changePlanResult.affected_project_ids.length}):
+                    </div>
+                    <ul className="mt-1 space-y-0.5">
+                      {changePlanResult.affected_project_ids.map((pid, i) => (
+                        <li key={i} className="font-mono text-[11px] truncate">
+                          {pid ?? "(account-level row, no project_id)"}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {changePlanResult.period_start && changePlanResult.period_end && (
+                  <div className="text-muted-foreground">
+                    New period: {fmtShortDate(changePlanResult.period_start)} →{" "}
+                    {fmtShortDate(changePlanResult.period_end)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              className="cursor-pointer"
+              disabled={changePlanLoading}
+            >
+              {changePlanResult ? "Close" : "Cancel"}
+            </AlertDialogCancel>
+            {!changePlanResult && (
+              <AlertDialogAction
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleChangePlanSubmit();
+                }}
+                disabled={changePlanLoading}
+                className="cursor-pointer"
+              >
+                {changePlanLoading ? <Spinner /> : "Apply Plan Change"}
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Apply confirm dialog */}
       <AlertDialog open={!!applyConfirm} onOpenChange={(open) => !open && setApplyConfirm(null)}>
