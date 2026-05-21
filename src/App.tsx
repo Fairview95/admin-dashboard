@@ -63,14 +63,20 @@ interface BlogQuotaData {
   account_id: string;
   plan_code: string | null;
   plan_display_name: string | null;
-  plan_monthly_quota: number | null;
+  plan_billing_cycle: string | null;   // 'monthly' / '6_month' / 'yearly' / 'trial'
+  plan_monthly_quota: number | null;   // per-cycle limit from plan_features
+  plan_reset_interval: string | null;  // 'monthly' / 'subscription_period' / etc.
   plan_duration_days: number | null;
   legacy_status: string | null;        // 'trial' | 'pro30' | 'active' | etc.
-  custom_blog_quota: number | null;    // override (monthly cadence), null = no override
+  custom_blog_quota: number | null;    // override (per-cycle), null = no override
   override_reason: string | null;
-  effective_quota: number | null;      // total over the period (cadence × months)
+  effective_quota: number | null;      // per-cycle cap (what enforcement counts)
+  // Quota cycle dates (what enforcement uses + customer indicator shows)
   period_start: string | null;
   period_end: string | null;
+  // Billing dates (when Dodo charges next) — separate from quota cycle
+  billing_period_start: string | null;
+  billing_period_end: string | null;
   used_this_period: number;
 }
 
@@ -1385,14 +1391,24 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                     {quotaData.used_this_period}
                   </p>
                 </div>
-                <div className="col-span-2">
+                <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                    Period
+                    Quota cycle ({quotaData.plan_reset_interval ?? "—"})
                   </p>
                   <p className="font-medium mt-0.5 text-xs">
                     {quotaData.period_start ? fmtDate(quotaData.period_start) : "—"}
                     {" → "}
                     {quotaData.period_end ? fmtDate(quotaData.period_end) : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Billing period
+                  </p>
+                  <p className="font-medium mt-0.5 text-xs">
+                    {quotaData.billing_period_start ? fmtDate(quotaData.billing_period_start) : "—"}
+                    {" → "}
+                    {quotaData.billing_period_end ? fmtDate(quotaData.billing_period_end) : "—"}
                   </p>
                 </div>
               </div>
