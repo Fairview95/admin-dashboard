@@ -592,9 +592,14 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
 
   // Default selection: prefer the new plan_code "monthly_30" (post-migration-048
   // canonical), fall back to legacy "pro30" if the dynamic plans list isn't
-  // loaded yet — backend's _resolve_plan accepts both via LEGACY_PLAN_ALIAS.
-  const getPlan = (key: string) =>
-    modulePlans[key] || (plans.length > 0 ? "monthly_30" : "pro30");
+  // Returns the plan the admin has SELECTED for this module (empty string
+  // = nothing selected yet → dropdown shows placeholder, Apply button
+  // disabled). Previously this defaulted to "monthly_30" / "pro30", which
+  // pre-filled the dropdown and risked an accidental click granting the
+  // wrong plan (especially confusing because the value displayed didn't
+  // reflect the customer's CURRENT plan — just an arbitrary default).
+  // Admin must now explicitly pick a plan before Apply does anything.
+  const getPlan = (key: string) => modulePlans[key] || "";
   const getDays = (key: string) => moduleDays[key] || "";
   const setPlan = (key: string, val: string) => setModulePlans((prev) => ({ ...prev, [key]: val }));
   const setDays = (key: string, val: string) => setModuleDays((prev) => ({ ...prev, [key]: val }));
@@ -1219,7 +1224,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               <td className="px-4 py-2">
                                 <Select value={getPlan(key)} onValueChange={(v) => setPlan(key, v)}>
                                   <SelectTrigger className="w-[180px] h-7 text-xs cursor-pointer">
-                                    <SelectValue />
+                                    <SelectValue placeholder="Select plan..." />
                                   </SelectTrigger>
                                   <SelectContent>
                                     {/* Plans pulled dynamically from core.subscription_plans
@@ -1275,8 +1280,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                                   <Button
                                     size="sm"
                                     onClick={() => setApplyConfirm({ projectId: proj.id, module: mod })}
-                                    disabled={actingOn !== null}
+                                    disabled={actingOn !== null || !getPlan(key)}
                                     className="h-7 px-3 text-xs cursor-pointer"
+                                    title={!getPlan(key) ? "Pick a plan first" : undefined}
                                   >
                                     {isActing ? <Spinner /> : "Apply"}
                                   </Button>
