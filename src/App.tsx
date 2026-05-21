@@ -592,9 +592,14 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
 
   // Default selection: prefer the new plan_code "monthly_30" (post-migration-048
   // canonical), fall back to legacy "pro30" if the dynamic plans list isn't
-  // loaded yet — backend's _resolve_plan accepts both via LEGACY_PLAN_ALIAS.
-  const getPlan = (key: string) =>
-    modulePlans[key] || (plans.length > 0 ? "monthly_30" : "pro30");
+  // Returns the plan the admin has SELECTED for this module (empty string
+  // = nothing selected yet → dropdown shows placeholder, Apply button
+  // disabled). Previously this defaulted to "monthly_30" / "pro30", which
+  // pre-filled the dropdown and risked an accidental click granting the
+  // wrong plan (especially confusing because the value displayed didn't
+  // reflect the customer's CURRENT plan — just an arbitrary default).
+  // Admin must now explicitly pick a plan before Apply does anything.
+  const getPlan = (key: string) => modulePlans[key] || "";
   const getDays = (key: string) => moduleDays[key] || "";
   const setPlan = (key: string, val: string) => setModulePlans((prev) => ({ ...prev, [key]: val }));
   const setDays = (key: string, val: string) => setModuleDays((prev) => ({ ...prev, [key]: val }));
@@ -1180,6 +1185,16 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                           const act = getActivation(proj.id, mod);
                           const sub = getSubscription(proj.id, mod);
                           const modStatus = (act?.status as string) || null;
+                          const modPlanCode = (act?.plan_code as string) || null;
+                          // Resolve plan_code → display name via the dynamic
+                          // plans list (/admin/plans). Falls back to the raw
+                          // plan_code string if plans haven't loaded yet, then
+                          // to legacy status (active/trial/pro30) if no plan_code.
+                          // Without this, admin sees just "active" without knowing
+                          // which actual plan they're on (yearly_80 vs monthly_30).
+                          const modPlanDisplay = modPlanCode
+                            ? (plans.find(p => p.code === modPlanCode)?.display_name || modPlanCode)
+                            : null;
                           const actExpiry = (act?.trial_ends_at as string) || null;
                           // Show subscription period end (when the billing cycle ends)
                           // Falls back to activation trial_ends_at for display
@@ -1204,12 +1219,28 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               <td className="px-4 py-2 font-medium">{MODULE_LABELS[mod]}</td>
                               <td className="px-4 py-2">
                                 {modStatus ? (
-                                  <span className="inline-flex items-center gap-1">
-                                    <Badge className={`text-xs font-medium border-0 ${STATUS_COLORS[displayStatus || ""] || "bg-muted"}`}>
-                                      {isExpired ? `${modStatus} (expired)` : modStatus}
-                                    </Badge>
-                                    {isAccountLevel && <span className="text-[10px] text-muted-foreground" title="Inherited from account-level activation">acct</span>}
-                                  </span>
+                                  <div className="flex flex-col gap-0.5">
+                                    {/* Show actual plan name (Premium 80 — Annual)
+                                        as primary signal, since that's what the
+                                        customer is paying for. Legacy status
+                                        (active/trial/pro30) shown below as a small
+                                        badge for context — useful for spotting
+                                        "trial" or "pending_cancellation" rows. */}
+                                    {modPlanDisplay && (
+                                      <span
+                                        className="text-xs font-medium text-foreground leading-tight"
+                                        title={modPlanCode || undefined}
+                                      >
+                                        {modPlanDisplay}
+                                      </span>
+                                    )}
+                                    <span className="inline-flex items-center gap-1">
+                                      <Badge className={`text-[10px] font-medium border-0 ${STATUS_COLORS[displayStatus || ""] || "bg-muted"}`}>
+                                        {isExpired ? `${modStatus} (expired)` : modStatus}
+                                      </Badge>
+                                      {isAccountLevel && <span className="text-[10px] text-muted-foreground" title="Inherited from account-level activation">acct</span>}
+                                    </span>
+                                  </div>
                                 ) : <span className="text-muted-foreground">—</span>}
                               </td>
                               <td className="px-4 py-2 text-muted-foreground">{modCount}</td>
@@ -1219,7 +1250,7 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                               <td className="px-4 py-2">
                                 <Select value={getPlan(key)} onValueChange={(v) => setPlan(key, v)}>
                                   <SelectTrigger className="w-[180px] h-7 text-xs cursor-pointer">
-                                    <SelectValue />
+                                    <SelectValue placeholder="Select plan..." />
                                   </SelectTrigger>
                                   <SelectContent>
                                     {/* Plans pulled dynamically from core.subscription_plans
@@ -1275,8 +1306,9 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                                   <Button
                                     size="sm"
                                     onClick={() => setApplyConfirm({ projectId: proj.id, module: mod })}
-                                    disabled={actingOn !== null}
+                                    disabled={actingOn !== null || !getPlan(key)}
                                     className="h-7 px-3 text-xs cursor-pointer"
+                                    title={!getPlan(key) ? "Pick a plan first" : undefined}
                                   >
                                     {isActing ? <Spinner /> : "Apply"}
                                   </Button>
