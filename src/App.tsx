@@ -105,6 +105,11 @@ interface ChangePlanResponse {
   affected_activations: number;
   affected_project_ids: string[];
   message: string;
+  // New quota cycle window after the upgrade (post-068). NULL if backend
+  // couldn't compute it (e.g., plan has no plan_features row). Used by
+  // the dialog's "New period: X → Y" confirmation line.
+  period_start: string | null;
+  period_end: string | null;
 }
 
 interface UserSubscriptionData {
