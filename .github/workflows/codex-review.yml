@@ -48,12 +48,28 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           BASE="${{ steps.pr-context.outputs.base }}"
+          HEAD="${{ steps.pr-context.outputs.head }}"
 
-          # Capture review output (built-in review prompt, scoped to base)
-          codex review \
-            --base "$BASE" \
+          # Generate the diff explicitly (codex review needs a TTY; exec works in CI)
+          git diff "$BASE...$HEAD" > /tmp/pr.diff
+
+          # Build the review prompt with the diff inlined
+          {
+            echo 'Review the following code diff. Mark findings [P1] (critical) or [P2] (advisory).'
+            echo 'Focus on: security issues, logic errors, race conditions, data loss risks, API contract violations.'
+            echo 'Ignore: style, naming nits, formatting, comments, whitespace.'
+            echo ''
+            echo 'DIFF_START'
+            cat /tmp/pr.diff
+            echo 'DIFF_END'
+          } > /tmp/prompt.txt
+
+          # Run codex exec (non-interactive, suitable for CI)
+          codex exec -s read-only \
             -c 'model_reasoning_effort="high"' \
-            --enable web_search_cached 2> /tmp/codex-stderr.txt | tee /tmp/codex-output.txt || true
+            --enable web_search_cached \
+            < /tmp/prompt.txt \
+            2> /tmp/codex-stderr.txt | tee /tmp/codex-output.txt || true
 
           # Save output for next step
           {
