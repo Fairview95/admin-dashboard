@@ -52,6 +52,7 @@ jobs:
 
           # Generate the diff explicitly (codex review needs a TTY; exec works in CI)
           git diff "$BASE...$HEAD" > /tmp/pr.diff
+          echo "Diff size: $(wc -c < /tmp/pr.diff) bytes"
 
           # Build the review prompt with the diff inlined
           {
@@ -60,16 +61,22 @@ jobs:
             echo 'Ignore: style, naming nits, formatting, comments, whitespace.'
             echo ''
             echo 'DIFF_START'
-            cat /tmp/pr.diff
+            head -c 50000 /tmp/pr.diff
             echo 'DIFF_END'
           } > /tmp/prompt.txt
 
           # Run codex exec (non-interactive, suitable for CI)
-          codex exec -s read-only \
+          # Pass prompt as argument; cap at 100KB to avoid arg length limits
+          codex exec "$(head -c 100000 /tmp/prompt.txt)" \
+            -s read-only \
             -c 'model_reasoning_effort="high"' \
             --enable web_search_cached \
-            < /tmp/prompt.txt \
             2> /tmp/codex-stderr.txt | tee /tmp/codex-output.txt || true
+
+          echo "--- STDERR ---"
+          cat /tmp/codex-stderr.txt || true
+          echo "--- OUTPUT SIZE ---"
+          wc -c /tmp/codex-output.txt || true
 
           # Save output for next step
           {
