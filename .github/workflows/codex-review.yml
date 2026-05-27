@@ -1,0 +1,60 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  codex-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Run Codex review
+        id: codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # Run codex review against the base branch
+          BASE="${{ github.event.pull_request.base.sha }}"
+
+          # Capture review output (built-in review prompt, scoped to base)
+          codex review \
+            --base "$BASE" \
+            -c 'model_reasoning_effort="high"' \
+            --enable web_search_cached 2> /tmp/codex-stderr.txt | tee /tmp/codex-output.txt || true
+
+          # Save output for next step
+          {
+            echo 'REVIEW_OUTPUT<<EOF'
+            cat /tmp/codex-output.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `${{ steps.codex.outputs.REVIEW_OUTPUT }}`;
+            const truncated = output.length > 65000
+              ? output.slice(0, 65000) + '\n\n_(Review truncated due to length)_'
+              : output;
+
+            const body = `## Codex Review\n\n${truncated || '_No review output generated._'}`;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
