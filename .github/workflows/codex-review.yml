@@ -3,6 +3,12 @@ name: Codex PR Review
 on:
   pull_request:
     types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,6 +18,21 @@ jobs:
   codex-review:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve PR context
+        id: pr-context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PR_NUM="${{ github.event.inputs.pr_number }}"
+            PR_DATA=$(gh pr view "$PR_NUM" --json headRefOid,baseRefOid,number --jq '{head: .headRefOid, base: .baseRefOid, number: .number}')
+          else
+            PR_DATA=$(echo '{"head":"${{ github.event.pull_request.head.sha }}","base":"${{ github.event.pull_request.base.sha }}","number":${{ github.event.pull_request.number }}}')
+          fi
+          echo "head=$(echo "$PR_DATA" | jq -r '.head')" >> "$GITHUB_OUTPUT"
+          echo "base=$(echo "$PR_DATA" | jq -r '.base')" >> "$GITHUB_OUTPUT"
+          echo "number=$(echo "$PR_DATA" | jq -r '.number')" >> "$GITHUB_OUTPUT"
+
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
@@ -25,8 +46,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          # Run codex review against the base branch
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE="${{ steps.pr-context.outputs.base }}"
 
           # Capture review output (built-in review prompt, scoped to base)
           codex review \
@@ -53,7 +73,7 @@ jobs:
             const body = `## Codex Review\n\n${truncated || '_No review output generated._'}`;
 
             await github.rest.issues.createComment({
-              issue_number: context.issue.number,
+              issue_number: ${{ steps.pr-context.outputs.number }},
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: body
