@@ -18,6 +18,11 @@ jobs:
   codex-review:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Resolve PR context
         id: pr-context
         env:
@@ -25,18 +30,13 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             PR_NUM="${{ github.event.inputs.pr_number }}"
-            PR_DATA=$(gh pr view "$PR_NUM" --json headRefOid,baseRefOid,number --jq '{head: .headRefOid, base: .baseRefOid, number: .number}')
+            PR_DATA=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUM" --jq '{head: .head.sha, base: .base.sha, number: .number}')
           else
             PR_DATA=$(echo '{"head":"${{ github.event.pull_request.head.sha }}","base":"${{ github.event.pull_request.base.sha }}","number":${{ github.event.pull_request.number }}}')
           fi
           echo "head=$(echo "$PR_DATA" | jq -r '.head')" >> "$GITHUB_OUTPUT"
           echo "base=$(echo "$PR_DATA" | jq -r '.base')" >> "$GITHUB_OUTPUT"
           echo "number=$(echo "$PR_DATA" | jq -r '.number')" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Codex CLI
         run: npm install -g @openai/codex
