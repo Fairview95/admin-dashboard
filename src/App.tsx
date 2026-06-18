@@ -238,6 +238,14 @@ const PLAN_LABELS: Record<string, string> = {
   yearly_30: "Standard 30 — Annual",
   yearly_50: "Growth 50 — Annual",
   yearly_80: "Premium 80 — Annual",
+  // Official Pro 10/10/10 plan (one purchase unlocks all 3 modules). Blog rows
+  // are primary; *_social / *_localseo are the bundle members the webhook stamps.
+  pro_10_monthly: "Pro — Monthly",
+  pro_10_annual: "Pro — Annual",
+  pro_10_monthly_social: "Pro — Monthly (Social)",
+  pro_10_annual_social: "Pro — Annual (Social)",
+  pro_10_monthly_localseo: "Pro — Monthly (Local SEO)",
+  pro_10_annual_localseo: "Pro — Annual (Local SEO)",
   // 10-10-10 demo grant (10 posts / 30 days per module). One code per module;
   // the apply success toast looks the plan up by code, so all three need entries.
   demo_10: "Demo 10 (30 days)",
@@ -267,6 +275,13 @@ const STATUS_COLORS: Record<string, string> = {
   yearly_30:   "bg-emerald-100 text-emerald-700",
   yearly_50:   "bg-emerald-100 text-emerald-700",
   yearly_80:   "bg-emerald-100 text-emerald-700",
+  // Official Pro plan — indigo to stand apart from the legacy tiers.
+  pro_10_monthly:          "bg-indigo-100 text-indigo-700",
+  pro_10_annual:           "bg-indigo-100 text-indigo-700",
+  pro_10_monthly_social:   "bg-indigo-100 text-indigo-700",
+  pro_10_annual_social:    "bg-indigo-100 text-indigo-700",
+  pro_10_monthly_localseo: "bg-indigo-100 text-indigo-700",
+  pro_10_annual_localseo:  "bg-indigo-100 text-indigo-700",
   // 10-10-10 demo grant — violet to read as a distinct internal demo tier.
   demo_10:          "bg-violet-100 text-violet-700",
   localseo_demo_10: "bg-violet-100 text-violet-700",
@@ -2134,6 +2149,12 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
                       <SelectItem value="yearly_30" className="cursor-pointer">Standard 30 — Annual</SelectItem>
                       <SelectItem value="yearly_50" className="cursor-pointer">Growth 50 — Annual</SelectItem>
                       <SelectItem value="yearly_80" className="cursor-pointer">Premium 80 — Annual</SelectItem>
+                      {/* Official Pro plan. NOTE: granting this here sets the BLOG
+                          entitlement only — the full 10/10/10 bundle (social +
+                          localseo) is fanned out by the Dodo webhook on a real
+                          purchase, not by a manual grant. */}
+                      <SelectItem value="pro_10_monthly" className="cursor-pointer">Pro — Monthly</SelectItem>
+                      <SelectItem value="pro_10_annual" className="cursor-pointer">Pro — Annual</SelectItem>
                     </>
                   )}
                 </SelectContent>
