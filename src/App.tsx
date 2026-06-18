@@ -246,6 +246,11 @@ const PLAN_LABELS: Record<string, string> = {
   pro_10_annual_social: "Pro — Annual (Social)",
   pro_10_monthly_localseo: "Pro — Monthly (Local SEO)",
   pro_10_annual_localseo: "Pro — Annual (Local SEO)",
+  // 10-10-10 demo grant (10 posts / 30 days per module). One code per module;
+  // the apply success toast looks the plan up by code, so all three need entries.
+  demo_10: "Demo 10 (30 days)",
+  localseo_demo_10: "Demo 10 (30 days)",
+  social_demo_10: "Demo 10 (30 days)",
 };
 
 const MODULE_LABELS: Record<string, string> = {
@@ -277,6 +282,10 @@ const STATUS_COLORS: Record<string, string> = {
   pro_10_annual_social:    "bg-indigo-100 text-indigo-700",
   pro_10_monthly_localseo: "bg-indigo-100 text-indigo-700",
   pro_10_annual_localseo:  "bg-indigo-100 text-indigo-700",
+  // 10-10-10 demo grant — violet to read as a distinct internal demo tier.
+  demo_10:          "bg-violet-100 text-violet-700",
+  localseo_demo_10: "bg-violet-100 text-violet-700",
+  social_demo_10:   "bg-violet-100 text-violet-700",
 };
 
 // --- Spinner ---
