@@ -183,6 +183,31 @@ interface LeaderboardData {
   leaderboard: LeaderboardRow[];
 }
 
+interface CostEconomics {
+  service: string;
+  period_days: number;
+  price_per_unit_usd: number;
+  target_band_pct: [number, number];
+  units_generated: number;
+  total_cost_usd: number;
+  cost_per_unit_usd: number;
+  cost_pct_of_price: number;
+  breakdown: {
+    text: { cost_usd: number; pct_of_total: number; cost_per_unit_usd: number };
+    image: { cost_usd: number; pct_of_total: number; cost_per_unit_usd: number };
+  };
+  by_operation: {
+    operation: string; count: number; cost_usd: number; cost_per_unit_usd: number;
+    input_tokens: number; output_tokens: number; images: number;
+  }[];
+  daily: { date: string; cost_usd: number }[];
+  top_projects: {
+    project_id: string; name: string; cost_usd: number; units: number; cost_per_unit_usd: number | null;
+  }[];
+  rows_analyzed: number;
+  truncated: boolean;
+}
+
 interface FailedJobRow {
   blog_id: string;
   project_id: string;
@@ -386,6 +411,13 @@ function api(key: string) {
       if (params.project_id) searchParams.set("project_id", params.project_id);
       if (params.days) searchParams.set("days", params.days.toString());
       const res = await fetch(`${API_URL}/api/v1/admin/usage?${searchParams}`, { headers });
+      return handleResponse(res);
+    },
+    async getCostEconomics(params: { days?: number; service?: string } = {}): Promise<CostEconomics> {
+      const searchParams = new URLSearchParams();
+      searchParams.set("service", params.service || "blog");
+      if (params.days) searchParams.set("days", params.days.toString());
+      const res = await fetch(`${API_URL}/api/v1/admin/cost-economics?${searchParams}`, { headers });
       return handleResponse(res);
     },
     async getLeaderboard(params: { date?: string; limit?: number } = {}): Promise<LeaderboardData> {
@@ -644,6 +676,12 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
   const [usageEmail, setUsageEmail] = useState("");
   const [usageSort, setUsageSort] = useState<"cost" | "tokens" | "images">("cost");
 
+  // Per-blog AI cost economics (the 10-20%-of-price tracker)
+  const [costData, setCostData] = useState<CostEconomics | null>(null);
+  const [costLoading, setCostLoading] = useState(false);
+  const [costError, setCostError] = useState<string | null>(null);
+  const [costDays, setCostDays] = useState("30");
+
   // Daily leaderboard state — date-pinned, top-N accounts across all modules.
   // Default date = today (UTC) so the page shows the current spend leaderboard
   // on first paint without the admin needing to pick anything.
@@ -703,6 +741,21 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
       setUsageLoading(false);
     }
   }, [client, usageDays]);
+
+  const loadCostEconomics = useCallback(async () => {
+    setCostLoading(true);
+    setCostError(null);
+    try {
+      const data = await client.getCostEconomics({ days: parseInt(costDays) || 30, service: "blog" });
+      setCostData(data);
+    } catch (err) {
+      setCostError(err instanceof Error ? err.message : "Failed to load cost economics");
+    } finally {
+      setCostLoading(false);
+    }
+  }, [client, costDays]);
+
+  useEffect(() => { loadCostEconomics(); }, [loadCostEconomics]);
 
   const loadLeaderboard = useCallback(async () => {
     setLeaderboardLoading(true);
@@ -1586,6 +1639,90 @@ function Dashboard({ adminKey, onLogout }: { adminKey: string; onLogout: () => v
         </section>
 
         {/* ============ API USAGE TRACKING ============ */}
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Per-blog AI cost</h2>
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
+            <Select value={costDays} onValueChange={setCostDays}>
+              <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7">7 days</SelectItem>
+                <SelectItem value="30">30 days</SelectItem>
+                <SelectItem value="90">90 days</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onClick={loadCostEconomics} disabled={costLoading} className="h-9 px-4 cursor-pointer">
+              {costLoading ? <Spinner /> : "Refresh"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Blog price assumed ${costData?.price_per_unit_usd?.toFixed(2) ?? "3.30"}/article · target 10-20%
+            </span>
+          </div>
+          {costError && <p className="text-sm text-red-600 mb-3">{costError}</p>}
+          {costData && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">AI cost / blog</p>
+                  <p className="text-xl font-semibold mt-1">${costData.cost_per_unit_usd.toFixed(3)}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">% of price (target 10-20%)</p>
+                  <p className={`text-xl font-semibold mt-1 ${costData.cost_pct_of_price > 20 ? "text-red-600" : costData.cost_pct_of_price >= 10 ? "text-amber-600" : "text-emerald-600"}`}>
+                    {costData.cost_pct_of_price.toFixed(1)}%
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">Blogs generated ({costData.period_days}d)</p>
+                  <p className="text-xl font-semibold mt-1">{costData.units_generated.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">Total AI spend</p>
+                  <p className="text-xl font-semibold mt-1">${costData.total_cost_usd.toFixed(2)}</p>
+                </div>
+              </div>
+              <div className="rounded-lg border p-3 mb-4">
+                <p className="text-xs text-muted-foreground mb-2">Cost split per blog</p>
+                <div className="flex gap-6 text-sm">
+                  <span>Text: <b>${costData.breakdown.text.cost_per_unit_usd.toFixed(3)}</b> <span className="text-muted-foreground">({costData.breakdown.text.pct_of_total}%)</span></span>
+                  <span>Images: <b>${costData.breakdown.image.cost_per_unit_usd.toFixed(3)}</b> <span className="text-muted-foreground">({costData.breakdown.image.pct_of_total}%)</span></span>
+                </div>
+              </div>
+              {costData.truncated && (
+                <p className="text-xs text-amber-600 mb-2">
+                  Showing first {costData.rows_analyzed.toLocaleString()} rows — totals may be partial; narrow the window.
+                </p>
+              )}
+              <div className="rounded-lg border overflow-hidden">
+                <div className="px-3 py-2 text-xs font-medium text-muted-foreground border-b">Top projects by AI spend ({costData.period_days}d)</div>
+                {costData.top_projects.length === 0 ? (
+                  <p className="p-3 text-sm text-muted-foreground">No usage in this window.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-muted-foreground">
+                        <th className="px-3 py-2 font-medium">Project</th>
+                        <th className="px-3 py-2 font-medium">Blogs</th>
+                        <th className="px-3 py-2 font-medium">Spend</th>
+                        <th className="px-3 py-2 font-medium">$/blog</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {costData.top_projects.map((p) => (
+                        <tr key={p.project_id} className="border-t">
+                          <td className="px-3 py-2">{p.name}</td>
+                          <td className="px-3 py-2">{p.units}</td>
+                          <td className="px-3 py-2">${p.cost_usd.toFixed(2)}</td>
+                          <td className="px-3 py-2">{p.cost_per_unit_usd != null ? `$${p.cost_per_unit_usd.toFixed(3)}` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+
         <section>
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">API Usage</h2>
 
